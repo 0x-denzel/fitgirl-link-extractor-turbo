@@ -10,6 +10,7 @@ import re
 import datetime
 import subprocess
 import argparse
+import random
 
 # Enable Windows ANSI Virtual Terminal Colors
 if sys.platform == "win32":
@@ -53,10 +54,30 @@ from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
-IDM_PATHS = [
-    r"C:\Program Files (x86)\Internet Download Manager\IDMan.exe",
-    r"C:\Program Files\Internet Download Manager\IDMan.exe"
-]
+
+
+def supports_osc8() -> bool:
+    """Detect if current terminal environment reliably supports OSC 8 clickable hyperlinks"""
+    if "WT_SESSION" in os.environ:
+        return True
+    if os.environ.get("TERM_PROGRAM") in ("vscode", "iTerm.app", "Apple_Terminal", "Hyper", "WezTerm", "ghostty"):
+        return True
+    if os.environ.get("COLORTERM") in ("truecolor", "24bit"):
+        return True
+    if sys.platform == "darwin":
+        return True
+    return False
+
+
+def make_link(text: str, url: str) -> str:
+    """Render clickable OSC 8 hyperlink in supported terminals, or clean text fallback"""
+    if supports_osc8():
+        return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
+    return f"{text}: {url}"
+
+
+LINK_SITE = make_link("Website", "https://chideraokonkwo.com")
+LINK_COFFEE = make_link("Buy Me a Coffee", "https://chideraokonkwo.gumroad.com/coffee")
 
 BANNER = f"""
 {C_CYAN}{C_BOLD} =============================================================================
@@ -64,12 +85,12 @@ BANNER = f"""
    |  ____(_) |  / ____(_)    | | | |    (_)     | |       
    | |__   _| |_| |  __ _ _ __| | | |     _ _ __ | | _____ 
    |  __| | | __| | |_ | | '__| | | |    | | '_ \| |/ / __|
-   | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \\
-   |_|    |_|\__|\_____|_|_|  |_| |______|_|_| |_|_|\_\___/
+   | |    | | |_| |__| | | |  | | | |____| | | | |   <\\__ \\
+   |_|    |_|\\__|\\_____|_|_|  |_| |______|_|_| |_|_|\\_\\___/
 
-             {C_YELLOW}>>> BY 0xDENZEL | https://chideraokonkwo.com | Tip: buymeacoffee.com/0xdenzel <<<{C_CYAN}{C_BOLD}
+             {C_YELLOW}>>> BY 0xDENZEL | {LINK_SITE} | {LINK_COFFEE} <<<{C_CYAN}{C_BOLD}
  ============================================================================={C_RESET}
-  {C_WHITE}Automated direct link resolver for IDM & JDownloader{C_RESET}
+  {C_WHITE}Automated direct link resolver for IDM, JDownloader & Free Download Manager{C_RESET}
   {C_DIM}Supports:
    [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
    [+] FitGirl Repack game pages (fitgirl-repacks.site/game-name/)
@@ -86,6 +107,7 @@ def clear_screen():
         os.system("cls")
     else:
         os.system("clear")
+
 
 
 def get_clipboard_text() -> str:
@@ -121,13 +143,61 @@ def copy_to_clipboard(text: str):
         pass
 
 
-def get_idm_exe():
-    if sys.platform != "win32":
-        return None
-    for p in IDM_PATHS:
-        if os.path.isfile(p):
-            return p
-    return None
+def get_installed_download_managers() -> list[tuple[str, str, str]]:
+    """Detect installed download managers across Windows and macOS.
+    Returns: list of (Name, LaunchPath, LaunchCommandType)
+    """
+    managers = []
+
+    if sys.platform == "win32":
+        # Internet Download Manager (IDM)
+        idm_paths = [
+            r"C:\Program Files (x86)\Internet Download Manager\IDMan.exe",
+            r"C:\Program Files\Internet Download Manager\IDMan.exe"
+        ]
+        for p in idm_paths:
+            if os.path.isfile(p):
+                managers.append(("Internet Download Manager (IDM)", p, "win_exec"))
+                break
+
+        # JDownloader 2 on Windows
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        prog_files = os.environ.get("ProgramFiles", "")
+        prog_files_x86 = os.environ.get("ProgramFiles(x86)", "")
+        jd_paths = [
+            os.path.join(local_app, "JDownloader 2.0", "JDownloader2.exe"),
+            os.path.join(prog_files, "JDownloader 2.0", "JDownloader2.exe"),
+            os.path.join(prog_files_x86, "JDownloader 2.0", "JDownloader2.exe")
+        ]
+        for p in jd_paths:
+            if p and os.path.isfile(p):
+                managers.append(("JDownloader 2", p, "win_exec"))
+                break
+
+        # Free Download Manager on Windows
+        fdm_paths = [
+            os.path.join(prog_files, "Softdeluxe", "Free Download Manager", "fdm.exe"),
+            os.path.join(prog_files, "FreeDownloadManager", "fdm.exe"),
+            os.path.join(local_app, "Programs", "Free Download Manager", "fdm.exe")
+        ]
+        for p in fdm_paths:
+            if p and os.path.isfile(p):
+                managers.append(("Free Download Manager", p, "win_exec"))
+                break
+
+    elif sys.platform == "darwin":
+        # macOS Applications
+        mac_apps = [
+            ("JDownloader 2", "/Applications/JDownloader 2.app"),
+            ("Free Download Manager", "/Applications/Free Download Manager.app"),
+            ("Neat Download Manager", "/Applications/NeatDownloadManager.app"),
+            ("Folx", "/Applications/Folx.app")
+        ]
+        for name, app_path in mac_apps:
+            if os.path.exists(app_path):
+                managers.append((name, app_path, "mac_open"))
+
+    return managers
 
 
 def parse_links_from_text(raw_text: str) -> list[str]:
@@ -235,19 +305,29 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
         page.on("response", on_response)
 
         try:
-            await page.goto(clean_url, wait_until="load", timeout=30000)
-            await asyncio.sleep(1.5)
+            await page.goto(clean_url, wait_until="domcontentloaded", timeout=25000)
+
+            # Check if link was removed or deleted by hoster
+            page_text = await page.content()
+            if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
+                return "REMOVED"
+
+            # Allow Cloudflare Turnstile / DOM scripts to settle
+            for _ in range(10):
+                if await page.locator('a:has-text("DOWNLOAD")').count() > 0:
+                    break
+                await asyncio.sleep(0.4)
 
             btn = page.locator('a:has-text("DOWNLOAD")')
             if await btn.count() > 0:
                 await btn.first.click()
-                await asyncio.sleep(0.8)
+                await asyncio.sleep(0.6)
                 await btn.first.click()
 
-                for _ in range(25):
+                for _ in range(30):
                     if found_link:
                         break
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.15)
 
             if found_link:
                 return found_link
@@ -258,7 +338,7 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
             page.remove_listener("popup", handle_popup)
             page.remove_listener("response", on_response)
 
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(random.uniform(0.6, 1.2))
 
     return None
 
@@ -400,10 +480,20 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         except Exception:
             browser = await p.chromium.launch(headless=True, args=launch_args)
 
+        if sys.platform == "darwin":
+            ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        else:
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent=ua,
+            locale="en-US",
+            timezone_id="America/New_York",
+            viewport={"width": 1920, "height": 1080},
         )
         page = await context.new_page()
+        # Auto-suppress any popup ad tab across the context
+        context.on("page", lambda p: asyncio.create_task(p.close()) if p != page else None)
         await Stealth().apply_stealth_async(page)
 
         for i, url in enumerate(filtered_urls, 1):
@@ -428,13 +518,15 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
             direct = await extract_direct_download(page, url)
             pct_done = int(i / total * 100)
             bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
-            if direct:
+            if direct == "REMOVED":
+                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}[REMOVED/404]{C_RESET}     ")
+            elif direct:
                 results.append(direct)
                 sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_GREEN}{C_BOLD}OK!{C_RESET}     ")
             else:
                 sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}FAILED{C_RESET}     ")
             sys.stdout.flush()
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(random.uniform(0.6, 1.2))
 
         sys.stdout.write("\n")
         await browser.close()
@@ -454,17 +546,22 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         copy_to_clipboard("\n".join(results))
         print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
 
-        idm_exe = get_idm_exe()
-        if idm_exe:
-            print(f"\n{C_GREEN}[+] Internet Download Manager (IDM) detected!{C_RESET}")
-            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch IDM now? [Y/N, default=Y]: {C_RESET}").strip().lower()
+        dms = get_installed_download_managers()
+        if dms:
+            dm_name, dm_target, dm_type = dms[0]
+            print(f"\n{C_GREEN}[+] {dm_name} detected!{C_RESET}")
+            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch {dm_name} now? [Y/N, default=Y]: {C_RESET}").strip().lower()
             if ans in ("", "y", "yes"):
-                subprocess.Popen([idm_exe])
-                print(f"{C_GREEN}[+] IDM launched!{C_RESET}")
-                print(f"    {C_DIM}In IDM: Click 'Tasks' -> 'Add batch download from clipboard'{C_RESET}")
-                print(f"    {C_DIM}        or 'Tasks' -> 'Import' -> 'From text file' ({os.path.basename(output_path)}){C_RESET}")
+                try:
+                    if dm_type == "mac_open":
+                        subprocess.Popen(["open", dm_target])
+                    else:
+                        subprocess.Popen([dm_target])
+                    print(f"{C_GREEN}[+] {dm_name} launched!{C_RESET}")
+                except Exception as e:
+                    print(f"{C_RED}[!] Could not launch {dm_name}: {e}{C_RESET}")
         else:
-            print(f"\n{C_WHITE}In IDM / JDownloader:{C_RESET} Import from text file or paste from clipboard:\n  {C_CYAN}{output_path}{C_RESET}")
+            print(f"\n{C_WHITE}In IDM / JDownloader / FDM:{C_RESET} Import from text file or paste from clipboard:\n  {C_CYAN}{output_path}{C_RESET}")
 
         # Reveal file in OS file manager (Windows Explorer or macOS Finder)
         try:

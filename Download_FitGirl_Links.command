@@ -9,8 +9,8 @@ fi
 
 if [ -f "Download_FitGirl_Links.bat" ]; then
     python3 -x "Download_FitGirl_Links.bat" "$@"
-elif [ -f "main.py" ]; then
-    python3 "main.py" "$@"
+elif [ -f "extract_ff_links.py" ]; then
+    python3 "extract_ff_links.py" "$@"
 else
     echo "[!] Engine script not found."
     read -p "Press [Enter] to exit..."

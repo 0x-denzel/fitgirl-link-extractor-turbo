@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [v1.0.1] - 2026-10-19
 ### Added
-- Author website branding (`https://chideraokonkwo.com`) and tip link (`buymeacoffee.com/0xdenzel`) directly in ASCII header banner.
+- OSC 8 clickable terminal hyperlinks for Website (`https://chideraokonkwo.com`) and Coffee Tip (`https://chideraokonkwo.gumroad.com/coffee`) with clean text fallback.
+- Cross-platform download manager detection and 1-click launcher for Windows (IDM, JDownloader 2, Free Download Manager) and macOS (JDownloader 2, FDM, NeatDM, Folx).
+- Anti-bot hardening: Platform-aware User-Agent spoofing, context-level popunder tab killer, and randomized request pacing (jitter).
+- Dead link detection: Instantly detects `File Not Found` / `404` pages as `[REMOVED/404]` without redundant retries.
 - Single-line in-place progress monitor with ASCII redirect icon (`➜`), progress bar, and percentage.
 - Static header retention (`clear_screen`) preventing header from scrolling off terminal.
 - macOS support: Cross-platform clipboard reading via `pbpaste`/`pbcopy`, macOS 1-click launcher (`Download_FitGirl_Links.command`), and Finder reveal via `open -R`.
