@@ -1,60 +1,91 @@
-# FitGirl Link Generator (Updated Standalone Edition)
+# FitGirl Turbo Link Extractor
 
-A high-performance tool that extracts direct download URLs from **FitGirl Repacks**, **PrivateBin pastes**, and **FuckingFast**, ready for 1-click batch downloading in **Internet Download Manager (IDM)** and **JDownloader**.
+A high-performance multi-hoster engine that automatically extracts direct CDN download URLs from **FitGirl Repacks**, **PrivateBin pastes**, **FuckingFast (`fuckingfast.co`)**, **FileKeeper (`filekeeper.net`)**, and **DataNodes (`datanodes.to`)**, ready for 1-click batch downloading in **Internet Download Manager (IDM)**, **JDownloader**, and **Free Download Manager (FDM)** across Windows and macOS.
 
 ```text
  =============================================================================
-    ______ _ _    _____ _      _   _      _       _        
-   |  ____(_) |  / ____(_)    | | | |    (_)     | |       
-   | |__   _| |_| |  __ _ _ __| | | |     _ _ __ | | _____ 
-   |  __| | | __| | |_ | | '__| | | |    | | '_ \| |/ / __|
-   | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \
-   |_|    |_|\__|\_____|_|_|  |_| |______|_|_| |_|_|\_\___/
+    ______ _ _    _____ _      _   _______             _           
+   |  ____(_) |  / ____(_)    | | |__   __|           | |          
+   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___  
+   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \ / _ \ 
+   | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
+   |_|    |_|\__|\_____|_|_|  |_|    |_| \__,_|_|     |_.__/ \___/ 
 
-                      >>> BY 0xDENZEL <<<
+             >>> BY 0xDENZEL | Website | Buy Me a Coffee <<<
  =============================================================================
 ```
 
-## Download & 1-Click Launch
+## Supported Hosters & Mirrors
 
-No git, no cloning, and no copying raw code required! Simply download from the [Official Release](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/tag/v1.0.0):
-
-* 🚀 **[Download Standalone BAT (`Download_FitGirl_Links.bat`)](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/download/v1.0.0/Download_FitGirl_Links.bat)**  
-  *(Direct single-file download)*
-* 📦 **[Download ZIP Archive (`FitGirl_Link_Extractor_v1.0.0.zip`)](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/download/v1.0.0/FitGirl_Link_Extractor_v1.0.0.zip)**  
-  *(Pre-packaged zip containing the launcher)*
-
----
-
-## How to Use
-
-1. Double-click **`Download_FitGirl_Links.bat`**.
-2. **Step 1:** Paste any **`paste.fitgirl-repacks.site`** link, FitGirl game page URL, or text file path.
-3. **Step 2:** Choose your filter options:
-   * Keep English only (automatically skips 20–30GB of foreign audio packs!).
-   * Exclude optional bonus files (soundtracks, trailers).
-4. **Step 3:** The tool decrypts the paste, solves Cloudflare challenges in the background, and generates direct download links.
-5. **Step 4:** All links are copied to your Windows Clipboard and saved to `idm_links.txt`. IDM is detected and launched automatically!
+| Hoster | Mirror Type | Extraction Speed | Cloudflare/Ad Clearance |
+| :--- | :--- | :--- | :--- |
+| **FuckingFast** (`fuckingfast.co`) | Direct High-Speed CDN | ~2.5s / link | Automatic Stealth Resolution |
+| **FileKeeper** (`filekeeper.net`) | Turbo Tunnel Mirrors | ~1.5s / link | Instant Direct Form Dispatch |
+| **DataNodes** (`datanodes.to`) | Cloud Storage Mirrors | ~6.0s / link | Interactive Turnstile Clearance |
 
 ---
 
-## Features
+## 1-Click Launch
 
-- **100% Self-Contained**: Polyglot Batch/Python architecture—single file with zero external script dependencies.
-- **Auto-Configuring**: Automatically installs missing dependencies (`playwright`, `playwright-stealth`, `requests`, `beautifulsoup4`) on first launch if needed.
-- **PrivateBin Decryption**: Natively decrypts `paste.fitgirl-repacks.site/?id#key` URLs client-side.
-- **Cloudflare & HTMX Bypass**: Stealth browser profile handles Cloudflare Turnstile and the 2-click ad popunder flow.
-- **Smart Language Filtering**: Selects English voiceover (`fg-selective-english*.bin`) and drops unnecessary languages to save bandwidth and storage.
-- **IDM Integration**: Auto-detects IDM, copies links to clipboard, and highlights the output file in File Explorer.
+No git, no cloning, and no copying raw code required! Simply download the standalone file for your OS:
 
-## Manual Clone (For Developers)
+* 🚀 **Windows**: Download [**`Download_FitGirl_Links.bat`**](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest) and double-click to launch.
+* 🍎 **macOS**: Download [**`Download_FitGirl_Links.command`**](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest), place in the same folder as the script, and double-click to launch.
+
+---
+
+## How It Works
+
+1. **Copy your links**: Copy any `paste.fitgirl-repacks.site` PrivateBin URL, FitGirl repack game page, or list of hoster URLs to your clipboard.
+2. **Launch the Engine**: Double-click `Download_FitGirl_Links.bat` (Windows) or `Download_FitGirl_Links.command` (macOS). The script auto-detects the links directly from your clipboard!
+3. **Filter Your Downloads**:
+   * **Language Voiceovers**: Choose to keep English only (automatically skipping 20–30 GB of foreign audio files!).
+   * **Bonus Files**: Option to exclude soundtracks, trailers, and developer commentary (`fg-optional*`).
+4. **Instant Resolution**: The engine resolves direct links in-place with real-time progress bars and ASCII status indicators (`➜ OK!`).
+5. **Download Manager Handoff**:
+   * Links are instantly written to `<Game_Name>_links.txt` in your `Downloads` directory.
+   * Links are copied to your system Clipboard.
+   * Highlights the file in Windows File Explorer / macOS Finder immediately.
+   * Auto-detects and prompts to launch **IDM**, **JDownloader 2**, or **Free Download Manager**.
+
+---
+
+## Core Features
+
+- **Multi-Hoster Engine**: Seamlessly handles FuckingFast, FileKeeper, and DataNodes mirrors.
+- **100% Self-Contained Polyglot**: Runs directly on Windows and macOS with zero external setup scripts.
+- **Zero-Drop Clipboard Engine**: Uses native Win32 `ctypes` on Windows (0ms, no timeouts) and `pbpaste` on macOS.
+- **PrivateBin Client Decryption**: Natively decrypts 128-bit AES encrypted FitGirl PrivateBin pastes client-side.
+- **Dead Link Detection**: Instantly marks deleted or 404 links as `[REMOVED/404]` without hanging.
+- **Smart Game Detection**: Automatically titles output text files using URL anchors and repack slugs (e.g. `CoD_MW4_links.txt`).
+- **Interactive Multi-Game Loop**: Queue and process multiple games consecutively in one terminal session.
+
+---
+
+## Command Line Usage
+
+For power users, scripts, and automations:
+
+```bash
+# Process a FitGirl PrivateBin paste
+Download_FitGirl_Links.bat "https://paste.fitgirl-repacks.site/?b12063dd4f520470#6yU4dxuF8EYy8VcYoGF92hn4QLsTJrGfrsdLCS6jPZ6r"
+
+# Process with custom output and language filter
+Download_FitGirl_Links.bat "links.txt" -o "C:\Downloads\my_game.txt" --lang english --no-bonus
+```
+
+---
+
+## Developer Setup
 
 ```bash
 git clone https://github.com/EditByDenzel/fitgirl-link-generator-updated.git
 cd fitgirl-link-generator-updated
-Download_FitGirl_Links.bat
+python -x Download_FitGirl_Links.bat
 ```
+
+---
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

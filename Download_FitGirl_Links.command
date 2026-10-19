@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 cd "$(dirname "$0")"
-echo "Starting FitGirl & FuckingFast Link Extractor..."
+echo "Starting FitGirl Turbo Link Extractor..."
 if ! command -v python3 &>/dev/null; then
     echo "[!] Python 3 is not installed. Please install Python 3 from https://www.python.org/"
     read -p "Press [Enter] to exit..."

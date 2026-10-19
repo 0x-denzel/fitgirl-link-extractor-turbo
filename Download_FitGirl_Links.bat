@@ -1,7 +1,8 @@
 @echo off & (python -x "%~f0" %* || (echo. & echo [!] Python is not installed or not in PATH. Please install Python 3.8+ from https://www.python.org/ & echo [Make sure to check 'Add Python to PATH' during installation] & echo. & pause)) & exit /b
 # =============================================================================
-#  FITGIRL & FUCKINGFAST LINK EXTRACTOR - STANDALONE ENGINE
+#  FITGIRL TURBO LINK EXTRACTOR - MULTI-HOSTER ENGINE
 #  Author: 0xdenzel (chideraokonkwo.com)
+#  Hosters: FuckingFast, FileKeeper, DataNodes
 # =============================================================================
 import asyncio
 import sys
@@ -12,9 +13,14 @@ import subprocess
 import argparse
 import random
 
-# Enable Windows ANSI Virtual Terminal Colors
+# Enable Windows ANSI Virtual Terminal Colors and UTF-8 output
 if sys.platform == "win32":
     os.system('')
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # Color Palette
 C_CYAN = "\033[96m"
@@ -66,22 +72,23 @@ LINK_COFFEE = make_link("Buy Me a Coffee", "https://chideraokonkwo.gumroad.com/c
 
 BANNER = f"""
 {C_CYAN}{C_BOLD} =============================================================================
-    ______ _ _    _____ _      _   _      _       _        
-   |  ____(_) |  / ____(_)    | | | |    (_)     | |       
-   | |__   _| |_| |  __ _ _ __| | | |     _ _ __ | | _____ 
-   |  __| | | __| | |_ | | '__| | | |    | | '_ \| |/ / __|
-   | |    | | |_| |__| | | |  | | | |____| | | | |   <\\__ \\
-   |_|    |_|\\__|\\_____|_|_|  |_| |______|_|_| |_|_|\\_\\___/
+    ______ _ _    _____ _      _   _______             _           
+   |  ____(_) |  / ____(_)    | | |__   __|           | |          
+   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___  
+   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \\ / _ \\ 
+   | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
+   |_|    |_|\\__|\\_____|_|_|  |_|    |_| \\__,_|_|     |_.__/ \\___/ 
 
              {C_YELLOW}>>> BY 0xDENZEL | {LINK_SITE} | {LINK_COFFEE} <<<{C_CYAN}{C_BOLD}
  ============================================================================={C_RESET}
   {C_WHITE}Automated direct link resolver for IDM, JDownloader & Free Download Manager{C_RESET}
-  {C_DIM}Supports:
+  {C_DIM}Supported Hosters & Mirrors:
+   [+] FuckingFast (fuckingfast.co) - Instant CDN Direct Links
+   [+] FileKeeper (filekeeper.net) - High-Speed Turbo Tunnel Mirrors
+   [+] DataNodes (datanodes.to) - Direct Cloud Storage Mirrors
    [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
    [+] FitGirl Repack game pages (fitgirl-repacks.site/game-name/)
-   [+] Raw FuckingFast links (single or multi-line with/without bullets)
-   [+] Text files (.txt) containing links
-   [+] Instant passthrough for already direct links (dl.fuckingfast.co/dl/...){C_RESET}
+   [+] Instant passthrough for already direct links (.dlproxy.uk, /dl/, /d/){C_RESET}
 {C_CYAN}{C_BOLD} ============================================================================={C_RESET}
 """
 
@@ -221,29 +228,56 @@ def get_installed_download_managers() -> list[tuple[str, str, str]]:
 
 
 def parse_links_from_text(raw_text: str) -> list[str]:
-    """Extract all FuckingFast URLs from raw text, ignoring bullets (- , *), markdown, and whitespace"""
-    found = re.findall(r'https?://(?:dl\.)?fuckingfast\.co/[^\s"\'<>]+', raw_text)
+    """Extract all supported hoster URLs (FuckingFast, FileKeeper, DataNodes) from raw text"""
+    patterns = [
+        r'https?://(?:dl\.)?fuckingfast\.co/[^\s"\'<>]+',
+        r'https?://(?:www\.)?filekeeper\.net/[^\s"\'<>]+',
+        r'https?://(?:www\.)?datanodes\.to/[^\s"\'<>]+',
+    ]
     seen = set()
     links = []
-    for l in found:
-        clean = l.rstrip('.,;*)\'"')
-        if clean not in seen:
-            seen.add(clean)
-            links.append(clean)
+    for pat in patterns:
+        for l in re.findall(pat, raw_text):
+            clean = l.rstrip('.,;*)\'"')
+            if clean not in seen:
+                seen.add(clean)
+                links.append(clean)
     return links
 
 
+def detect_hoster(url: str) -> str:
+    """Identify which hoster service hosts the given URL"""
+    lower = url.lower()
+    if "filekeeper.net" in lower:
+        return "filekeeper"
+    elif "datanodes.to" in lower:
+        return "datanodes"
+    return "fuckingfast"
+
+
+def is_direct_link(url: str) -> bool:
+    """Check if a URL is already an instant direct CDN download link"""
+    lower = url.lower()
+    if "dl.fuckingfast.co/dl/" in lower:
+        return True
+    if "dlproxy.uk" in lower or ("/download/" in lower and "tunnel" in lower):
+        return True
+    if "/d/" in lower and "datanodes.to" in lower:
+        return True
+    return False
+
+
 def inspect_input(raw_text: str):
-    """Inspect text and find all pastebin links, repack page links, and direct/raw FF links"""
+    """Inspect text and find all pastebin links, repack page links, and hoster links"""
     paste_links = re.findall(r'https?://paste\.fitgirl-repacks\.site/[^\s"\'<>]+', raw_text)
     repack_links = [u for u in re.findall(r'https?://fitgirl-repacks\.site/[^\s"\'<>]+', raw_text)
                     if not u.startswith("https://paste.") and not u.startswith("http://paste.")]
-    ff_links = parse_links_from_text(raw_text)
-    return paste_links, repack_links, ff_links
+    hoster_links = parse_links_from_text(raw_text)
+    return paste_links, repack_links, hoster_links
 
 
 def detect_game_name(urls: list[str], input_source: str = "") -> str | None:
-    """Detect game name from repack page URL, anchors (#Game_Name_--_...), or local file name"""
+    """Detect game name from repack page URL, anchors (#Game_Name_--_...), or URL filename"""
     if "fitgirl-repacks.site" in input_source and "paste." not in input_source:
         clean = input_source.strip().rstrip('/')
         slug = clean.split('/')[-1]
@@ -251,6 +285,7 @@ def detect_game_name(urls: list[str], input_source: str = "") -> str | None:
             return slug.replace("-", "_")
 
     for u in urls:
+        # 1. Anchor format: #Game_Name_--_...
         if '#' in u:
             anchor = u.split('#')[-1]
             m = re.match(r'^([A-Za-z0-9_.\-]+?)(?:_--_|--|\.part\d|\.rar|\.bin)', anchor, re.IGNORECASE)
@@ -258,6 +293,14 @@ def detect_game_name(urls: list[str], input_source: str = "") -> str | None:
                 name = m.group(1).rstrip('_.-')
                 if name and not name.lower().startswith("fg-"):
                     return name
+
+        # 2. Path filename format: /<id>/Game_Name_--_...
+        filename = u.split('/')[-1].split('?')[0].split('#')[0]
+        m_file = re.match(r'^([A-Za-z0-9_.\-]+?)(?:_--_|--|\.part\d|\.rar|\.bin)', filename, re.IGNORECASE)
+        if m_file:
+            name = m_file.group(1).rstrip('_.-')
+            if name and not name.lower().startswith("fg-"):
+                return name
 
     if os.path.isfile(input_source):
         base = os.path.splitext(os.path.basename(input_source))[0]
@@ -278,12 +321,12 @@ async def extract_links_from_paste(page, paste_url: str) -> list[str]:
     links = parse_links_from_text(body_text)
 
     print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
-    print(f"         Extracted {C_BOLD}{len(links)}{C_RESET} FuckingFast link(s) from paste.")
+    print(f"         Extracted {C_BOLD}{len(links)}{C_RESET} link(s) from paste.")
     return links
 
 
 async def extract_links_from_fitgirl_page(page, repack_url: str) -> list[str]:
-    """Scrape FuckingFast links from a FitGirl repack page"""
+    """Scrape supported hoster links from a FitGirl repack page"""
     print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Loading FitGirl repack page: {C_CYAN}{repack_url}{C_RESET}")
     await page.goto(repack_url, wait_until="load", timeout=45000)
     await asyncio.sleep(2)
@@ -291,12 +334,12 @@ async def extract_links_from_fitgirl_page(page, repack_url: str) -> list[str]:
     content = await page.content()
     links = parse_links_from_text(content)
 
-    print(f"         Found {C_BOLD}{len(links)}{C_RESET} FuckingFast link(s) on repack page.")
+    print(f"         Found {C_BOLD}{len(links)}{C_RESET} link(s) on repack page.")
     return links
 
 
-async def extract_direct_download(page, url: str, retries: int = 3) -> str | None:
-    """Extract direct download link handling Cloudflare Turnstile, HTMX & ad popunders."""
+async def extract_fuckingfast(page, url: str, retries: int = 3) -> str | None:
+    """Extract FuckingFast direct download link handling Cloudflare Turnstile, HTMX & popunders."""
     clean_url = url.split('#')[0].strip()
     if not clean_url:
         return None
@@ -327,12 +370,12 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
         try:
             await page.goto(clean_url, wait_until="domcontentloaded", timeout=25000)
 
-            # Check if link was removed or deleted by hoster
+            # Check if file was removed or deleted by hoster
             page_text = await page.content()
             if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
                 return "REMOVED"
 
-            # Allow Cloudflare Turnstile / DOM scripts to settle
+            # Allow DOM scripts to settle
             for _ in range(10):
                 if await page.locator('a:has-text("DOWNLOAD")').count() > 0:
                     break
@@ -363,6 +406,194 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
     return None
 
 
+async def extract_filekeeper(page, url: str, retries: int = 3) -> str | None:
+    """Extract FileKeeper direct download link via instant high-speed form resolution."""
+    clean_url = url.split('#')[0].strip()
+    if not clean_url:
+        return None
+
+    for attempt in range(1, retries + 1):
+        found_link = None
+
+        def handle_download(d):
+            nonlocal found_link
+            found_link = d.url
+
+        def handle_popup(p):
+            asyncio.create_task(p.close())
+
+        async def on_response(response):
+            nonlocal found_link
+            u = response.url
+            if "dlproxy.uk" in u or "tunnel" in u or ("/download/" in u and "filekeeper.net" not in u):
+                found_link = u
+            loc = response.headers.get("location")
+            if loc and ("dlproxy.uk" in loc or "tunnel" in loc or ("/download/" in loc and "filekeeper.net" not in loc)):
+                found_link = loc
+
+        page.on("download", handle_download)
+        page.on("popup", handle_popup)
+        page.on("response", on_response)
+
+        try:
+            await page.goto(clean_url, wait_until="domcontentloaded", timeout=25000)
+
+            # Check if file was removed
+            page_text = await page.content()
+            if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
+                return "REMOVED"
+
+            # Parse file code from URL: https://filekeeper.net/<code-id>/<filename>
+            parts = clean_url.replace("https://", "").replace("http://", "").split('/')
+            code = parts[1] if len(parts) >= 2 else ""
+
+            # Direct form submit bypassing countdown and advertising popups
+            await page.evaluate(f"""() => {{
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = 'https://filekeeper.net/download';
+                const fields = {{
+                    'op': 'download2',
+                    'id': '{code}',
+                    'rand': '',
+                    'referer': '',
+                    'method_free': 'Free download',
+                    'down_direct': '1'
+                }};
+                for (const [k, v] of Object.entries(fields)) {{
+                    const inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = k;
+                    inp.value = v;
+                    form.appendChild(inp);
+                }}
+                document.body.appendChild(form);
+                form.submit();
+            }}""")
+
+            for _ in range(35):
+                if found_link:
+                    break
+                await asyncio.sleep(0.15)
+
+            if found_link:
+                return found_link
+        except Exception:
+            pass
+        finally:
+            page.remove_listener("download", handle_download)
+            page.remove_listener("popup", handle_popup)
+            page.remove_listener("response", on_response)
+
+        await asyncio.sleep(random.uniform(0.5, 1.0))
+
+    return None
+
+
+async def extract_datanodes(page, url: str, retries: int = 2) -> str | None:
+    """Extract DataNodes direct download link via progression and verification."""
+    clean_url = url.split('#')[0].strip()
+    if not clean_url:
+        return None
+
+    for attempt in range(1, retries + 1):
+        found_link = None
+
+        def handle_download(d):
+            nonlocal found_link
+            found_link = d.url
+
+        def handle_popup(p):
+            asyncio.create_task(p.close())
+
+        async def on_response(response):
+            nonlocal found_link
+            u = response.url
+            if "/d/" in u and "datanodes.to" in u:
+                found_link = u
+            loc = response.headers.get("location")
+            if loc and "/d/" in loc:
+                found_link = loc
+
+        page.on("download", handle_download)
+        page.on("popup", handle_popup)
+        page.on("response", on_response)
+
+        try:
+            await page.goto(clean_url, wait_until="domcontentloaded", timeout=30000)
+
+            # Check if file was removed
+            page_text = await page.content()
+            if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
+                return "REMOVED"
+
+            # Step 1: Wait up to 8s for #method_free button to become enabled
+            for _ in range(16):
+                btn_state = await page.evaluate("""() => {
+                    const b = document.getElementById('method_free');
+                    return b && !b.disabled;
+                }""")
+                if btn_state:
+                    break
+                await asyncio.sleep(0.5)
+
+            # Submit form to navigate to Step 2
+            try:
+                async with page.expect_navigation(timeout=15000):
+                    await page.evaluate("""() => {
+                        const btn = document.getElementById('method_free');
+                        if (btn) {
+                            btn.removeAttribute('disabled');
+                            btn.click();
+                        }
+                    }""")
+            except Exception:
+                pass
+
+            await asyncio.sleep(3)
+
+            # Step 2: Interact with verification if present
+            loc = page.locator('.cf-turnstile')
+            if await loc.count() > 0:
+                box = await loc.bounding_box()
+                if box:
+                    await page.mouse.click(box['x'] + 30, box['y'] + 30)
+                    await asyncio.sleep(3)
+
+            # Check if download button or direct link is ready
+            btn_dl = page.locator('button:has-text("Download"), button:has-text("Start Download")')
+            if await btn_dl.count() > 0:
+                await btn_dl.first.click()
+                for _ in range(30):
+                    if found_link:
+                        break
+                    await asyncio.sleep(0.2)
+
+            if found_link:
+                return found_link
+        except Exception:
+            pass
+        finally:
+            page.remove_listener("download", handle_download)
+            page.remove_listener("popup", handle_popup)
+            page.remove_listener("response", on_response)
+
+        await asyncio.sleep(random.uniform(0.6, 1.2))
+
+    return None
+
+
+async def extract_direct_download(page, url: str) -> str | None:
+    """Master direct download dispatcher routing each URL to its dedicated resolver engine"""
+    hoster = detect_hoster(url)
+    if hoster == "filekeeper":
+        return await extract_filekeeper(page, url)
+    elif hoster == "datanodes":
+        return await extract_datanodes(page, url)
+    else:
+        return await extract_fuckingfast(page, url)
+
+
 async def run_pipeline(input_source: str, output_path: str | None = None, exclude_bonus: bool = False, keep_lang: str | None = "english"):
     clean_input = input_source.strip().strip('"').strip("'")
     raw_urls = []
@@ -371,9 +602,9 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Reading links from local file: {C_CYAN}{clean_input}{C_RESET}")
         with open(clean_input, "r", encoding="utf-8") as f:
             content = f.read()
-        paste_links, repack_links, ff_links = inspect_input(content)
+        paste_links, repack_links, hoster_links = inspect_input(content)
     else:
-        paste_links, repack_links, ff_links = inspect_input(clean_input)
+        paste_links, repack_links, hoster_links = inspect_input(clean_input)
 
     # 1. Resolve pastebin or repack links
     if paste_links or repack_links:
@@ -399,10 +630,18 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
 
             await browser.close()
 
-    if ff_links:
+    if hoster_links:
         if not paste_links and not repack_links:
-            print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Found {C_BOLD}{len(ff_links)}{C_RESET} FuckingFast link(s) directly from input (no pastebin needed).")
-        raw_urls.extend(ff_links)
+            ff_cnt = sum(1 for u in hoster_links if "fuckingfast" in u)
+            fk_cnt = sum(1 for u in hoster_links if "filekeeper" in u)
+            dn_cnt = sum(1 for u in hoster_links if "datanodes" in u)
+            bd = []
+            if ff_cnt: bd.append(f"{ff_cnt} FuckingFast")
+            if fk_cnt: bd.append(f"{fk_cnt} FileKeeper")
+            if dn_cnt: bd.append(f"{dn_cnt} DataNodes")
+            h_str = ", ".join(bd) if bd else f"{len(hoster_links)} link(s)"
+            print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Found {C_BOLD}{len(hoster_links)}{C_RESET} link(s) directly from input ({h_str}).")
+        raw_urls.extend(hoster_links)
 
     # Deduplicate
     seen = set()
@@ -414,11 +653,11 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
     raw_urls = deduped_urls
 
     if not raw_urls:
-        print(f"\n{C_RED}[-] No valid FuckingFast links found to process.{C_RESET}")
+        print(f"\n{C_RED}[-] No valid download links (FuckingFast, FileKeeper, DataNodes) found to process.{C_RESET}")
         return
 
     # 2. Check if all links are direct
-    direct_links_only = [u for u in raw_urls if "/dl/" in u and "dl.fuckingfast.co" in u]
+    direct_links_only = [u for u in raw_urls if is_direct_link(u)]
     if len(direct_links_only) == len(raw_urls):
         print("\n" + f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
         print(f"  {C_YELLOW}{C_BOLD}[+] NOTICE: All links provided are ALREADY direct download links!{C_RESET}")
@@ -533,13 +772,19 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         await Stealth().apply_stealth_async(page)
 
         for i, url in enumerate(filtered_urls, 1):
-            name_hint = url.split('#')[-1] if '#' in url else f"Part {i}"
+            if '#' in url:
+                name_hint = url.split('#')[-1]
+            elif '/' in url:
+                name_hint = url.split('/')[-1]
+            else:
+                name_hint = f"Part {i}"
+
             pct = int((i - 1) / total * 100)
             bar_len = 14
             filled = int(bar_len * (i - 1) / total)
             bar = "█" * filled + "░" * (bar_len - filled)
 
-            if "/dl/" in url and "dl.fuckingfast.co" in url:
+            if is_direct_link(url):
                 pct_done = int(i / total * 100)
                 bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
                 sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_YELLOW}(Direct) OK!{C_RESET}     ")
@@ -616,17 +861,24 @@ def interactive_menu():
     print(BANNER)
 
     clip_text = get_clipboard_text()
-    p_links, r_links, f_links = inspect_input(clip_text)
+    p_links, r_links, h_links = inspect_input(clip_text)
     src = ""
 
-    if p_links or r_links or f_links:
+    if p_links or r_links or h_links:
         desc_parts = []
         if p_links:
             desc_parts.append(f"{len(p_links)} FitGirl Pastebin URL(s)")
         if r_links:
             desc_parts.append(f"{len(r_links)} FitGirl Repack Page(s)")
-        if f_links:
-            desc_parts.append(f"{len(f_links)} FuckingFast link(s)")
+        if h_links:
+            ff_c = sum(1 for u in h_links if "fuckingfast" in u)
+            fk_c = sum(1 for u in h_links if "filekeeper" in u)
+            dn_c = sum(1 for u in h_links if "datanodes" in u)
+            h_details = []
+            if ff_c: h_details.append(f"{ff_c} FuckingFast")
+            if fk_c: h_details.append(f"{fk_c} FileKeeper")
+            if dn_c: h_details.append(f"{dn_c} DataNodes")
+            desc_parts.append(f"{len(h_links)} link(s) [{', '.join(h_details)}]")
 
         desc = " and ".join(desc_parts)
         print(f"{C_GREEN}[+] Clipboard auto-detect: Found {C_BOLD}{desc}{C_RESET}{C_GREEN} in your Clipboard!{C_RESET}")
@@ -656,10 +908,10 @@ def interactive_menu():
         print(f"{C_RED}[!] No input provided.{C_RESET}")
         return
 
-    p_check, r_check, f_check = inspect_input(src)
-    if f_check and not p_check and not r_check:
-        direct_check = [u for u in f_check if "/dl/" in u and "dl.fuckingfast.co" in u]
-        if len(direct_check) == len(f_check):
+    p_check, r_check, h_check = inspect_input(src)
+    if h_check and not p_check and not r_check:
+        direct_check = [u for u in h_check if is_direct_link(u)]
+        if len(direct_check) == len(h_check):
             asyncio.run(run_pipeline(src, None, False, None))
             return
 
@@ -687,7 +939,7 @@ def interactive_menu():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract direct FuckingFast download links from FitGirl pastes/pages")
+    parser = argparse.ArgumentParser(description="FitGirl Turbo Link Extractor - Direct download resolver for FuckingFast, FileKeeper & DataNodes")
     parser.add_argument("source", nargs="?", help="Pastebin URL, FitGirl page URL, text file path, or link")
     parser.add_argument("-o", "--output", default=None, help="Output file (default: <Game_Name>_links.txt in Downloads)")
     parser.add_argument("--no-bonus", action="store_true", help="Exclude bonus files (fg-optional*)")
