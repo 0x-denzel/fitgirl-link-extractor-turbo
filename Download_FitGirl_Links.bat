@@ -1,36 +1,7 @@
-@echo off
-rem = """
-setlocal EnableDelayedExpansion
-title FitGirl ^& FuckingFast Link Extractor - by 0xdenzel
-chcp 65001 >nul
-color 0B
-
-:: Check if Python is installed
-python --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo =============================================================================
-    echo  [!] Error: Python is not installed or not added to your system PATH.
-    echo  Please download and install Python (3.8+) from https://www.python.org/
-    echo  (Make sure to check the box "Add Python to PATH" during installation)
-    echo =============================================================================
-    echo.
-    pause
-    exit /b 1
-)
-
-:: Run Python directly on this self-contained hybrid file!
-python -x "%~f0" %*
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo [!] An unexpected error occurred.
-    pause
-)
-exit /b %ERRORLEVEL%
-"""
-
+@echo off & (python -x "%~f0" %* || (echo. & echo [!] Python is not installed or not in PATH. Please install Python 3.8+ from https://www.python.org/ & echo [Make sure to check 'Add Python to PATH' during installation] & echo. & pause)) & exit /b
 # =============================================================================
-#  PYTHON ENGINE (Integrated Standalone Core)
+#  FITGIRL & FUCKINGFAST LINK EXTRACTOR - STANDALONE ENGINE
+#  Author: 0xdenzel
 # =============================================================================
 import asyncio
 import sys
@@ -55,9 +26,12 @@ for mod, pkg in REQUIRED_PACKAGES.items():
         missing_pkgs.append(pkg)
 
 if missing_pkgs:
-    print(f"[!] First-time setup: Installing required libraries ({', '.join(missing_pkgs)})...")
-    subprocess.run([sys.executable, "-m", "pip", "install"] + missing_pkgs, check=True)
-    print("[+] Dependencies successfully installed!\n")
+    print(f"\n[!] First-time setup: Installing required libraries ({', '.join(missing_pkgs)})...")
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install"] + missing_pkgs, check=True)
+        print("[+] Dependencies successfully installed!\n")
+    except Exception as e:
+        print(f"[!] Warning: Could not auto-install dependencies: {e}")
 
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -116,6 +90,7 @@ async def extract_links_from_paste(page, paste_url: str) -> list[str]:
     body_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
     found = re.findall(r'https://fuckingfast\.co/[^\s"\'<>]+', body_text)
 
+    # Deduplicate while preserving order
     seen = set()
     links = []
     for l in found:
