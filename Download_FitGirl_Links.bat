@@ -67,7 +67,7 @@ BANNER = f"""
    | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \\
    |_|    |_|\__|\_____|_|_|  |_| |______|_|_| |_|_|\_\___/
 
-             {C_YELLOW}>>> BY 0xDENZEL | https://chideraokonkwo.com <<<{C_CYAN}{C_BOLD}
+             {C_YELLOW}>>> BY 0xDENZEL | https://chideraokonkwo.com | Tip: buymeacoffee.com/0xdenzel <<<{C_CYAN}{C_BOLD}
  ============================================================================={C_RESET}
   {C_WHITE}Automated direct link resolver for IDM & JDownloader{C_RESET}
   {C_DIM}Supports:
@@ -78,6 +78,14 @@ BANNER = f"""
    [+] Instant passthrough for already direct links (dl.fuckingfast.co/dl/...){C_RESET}
 {C_CYAN}{C_BOLD} ============================================================================={C_RESET}
 """
+
+
+def clear_screen():
+    """Clear terminal screen to keep the header static at the top"""
+    if sys.platform == "win32":
+        os.system("cls")
+    else:
+        os.system("clear")
 
 
 def get_clipboard_text() -> str:
@@ -400,25 +408,35 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
 
         for i, url in enumerate(filtered_urls, 1):
             name_hint = url.split('#')[-1] if '#' in url else f"Part {i}"
+            pct = int((i - 1) / total * 100)
+            bar_len = 14
+            filled = int(bar_len * (i - 1) / total)
+            bar = "█" * filled + "░" * (bar_len - filled)
 
             if "/dl/" in url and "dl.fuckingfast.co" in url:
-                sys.stdout.write(f"  [{i}/{total}] {name_hint[:50]}... {C_YELLOW}(Already direct link) OK!{C_RESET}\n")
+                pct_done = int(i / total * 100)
+                bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
+                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_YELLOW}(Direct) OK!{C_RESET}     ")
                 sys.stdout.flush()
                 results.append(url.split('#')[0].strip())
                 continue
 
-            sys.stdout.write(f"  [{i}/{total}] Resolving {name_hint[:50]}... ")
+            # Inline display with ASCII redirect icon while resolving
+            sys.stdout.write(f"\r  [{i}/{total}] {pct:3d}% |{bar}| {name_hint[:32]} ➜ {C_CYAN}Resolving...{C_RESET}     ")
             sys.stdout.flush()
 
             direct = await extract_direct_download(page, url)
+            pct_done = int(i / total * 100)
+            bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
             if direct:
                 results.append(direct)
-                sys.stdout.write(f"{C_GREEN}{C_BOLD}OK!{C_RESET}\n")
+                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_GREEN}{C_BOLD}OK!{C_RESET}     ")
             else:
-                sys.stdout.write(f"{C_RED}{C_BOLD}FAILED{C_RESET}\n")
+                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}FAILED{C_RESET}     ")
             sys.stdout.flush()
             await asyncio.sleep(0.8)
 
+        sys.stdout.write("\n")
         await browser.close()
 
     # 6. Finalize output
@@ -461,6 +479,7 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
 
 
 def interactive_menu():
+    clear_screen()
     print(BANNER)
 
     clip_text = get_clipboard_text()

@@ -4,8 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [v1.0.1] - 2026-10-19
 ### Added
-- Author website branding (`https://chideraokonkwo.com`) in ASCII header and CLI output.
-- macOS support: Cross-platform clipboard reading via `pbpaste`/`pbcopy` and macOS Finder reveal via `open -R`.
+- Author website branding (`https://chideraokonkwo.com`) and tip link (`buymeacoffee.com/0xdenzel`) directly in ASCII header banner.
+- Single-line in-place progress monitor with ASCII redirect icon (`➜`), progress bar, and percentage.
+- Static header retention (`clear_screen`) preventing header from scrolling off terminal.
+- macOS support: Cross-platform clipboard reading via `pbpaste`/`pbcopy`, macOS 1-click launcher (`Download_FitGirl_Links.command`), and Finder reveal via `open -R`.
 - Single-instance direct link bypass: Skips headless browser overhead when raw direct links are provided.
 - Dynamic game name detection from URL anchors and repack slugs.
 - Auto-restart loop to queue multiple games consecutively without restarting the launcher.
