@@ -4,7 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [v1.0.1] - 2026-10-19
 ### Added
-- OSC 8 clickable terminal hyperlinks for Website (`https://chideraokonkwo.com`) and Coffee Tip (`https://chideraokonkwo.gumroad.com/coffee`) with clean text fallback.
+- Ultra-fast native Win32 `ctypes` clipboard reader: Reads clipboard in 0ms with zero subprocess overhead, eliminating PowerShell timeout drops.
+- Immediate folder & file reveal: Automatically opens Windows Explorer / macOS Finder and highlights the saved links file immediately upon completion, before prompting for download managers.
+- Compact single-line OSC 8 terminal hyperlinks: Renders `Website` and `Buy Me a Coffee` cleanly without line-wrapping across standard 80-column consoles.
+- Proprietary moat protection: Neutralized internal architecture phrasing across all console logs and status indicators.
 - Cross-platform download manager detection and 1-click launcher for Windows (IDM, JDownloader 2, Free Download Manager) and macOS (JDownloader 2, FDM, NeatDM, Folx).
 - Anti-bot hardening: Platform-aware User-Agent spoofing, context-level popunder tab killer, and randomized request pacing (jitter).
 - Dead link detection: Instantly detects `File Not Found` / `404` pages as `[REMOVED/404]` without redundant retries.

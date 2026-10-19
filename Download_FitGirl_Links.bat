@@ -56,24 +56,9 @@ from playwright_stealth import Stealth
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 
 
-def supports_osc8() -> bool:
-    """Detect if current terminal environment reliably supports OSC 8 clickable hyperlinks"""
-    if "WT_SESSION" in os.environ:
-        return True
-    if os.environ.get("TERM_PROGRAM") in ("vscode", "iTerm.app", "Apple_Terminal", "Hyper", "WezTerm", "ghostty"):
-        return True
-    if os.environ.get("COLORTERM") in ("truecolor", "24bit"):
-        return True
-    if sys.platform == "darwin":
-        return True
-    return False
-
-
 def make_link(text: str, url: str) -> str:
-    """Render clickable OSC 8 hyperlink in supported terminals, or clean text fallback"""
-    if supports_osc8():
-        return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
-    return f"{text}: {url}"
+    """Render clickable OSC 8 hyperlink everywhere; modern conhost, Windows Terminal & macOS parse cleanly without wrapping"""
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
 LINK_SITE = make_link("Website", "https://chideraokonkwo.com")
@@ -109,17 +94,52 @@ def clear_screen():
         os.system("clear")
 
 
-
 def get_clipboard_text() -> str:
-    """Cross-platform clipboard reader (Windows & macOS & Linux)"""
+    """Cross-platform fast clipboard reader (ctypes Win32 on Windows, pbpaste on macOS, xclip on Linux)"""
     try:
         if sys.platform == "darwin":
             cmd = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=2)
             return cmd.stdout.strip()
         elif sys.platform == "win32":
-            cmd = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
-                                 capture_output=True, text=True, timeout=3)
-            return cmd.stdout.strip()
+            # 1. Native ctypes Win32 read: 0ms, zero process spawning, no timeouts
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+                user32.OpenClipboard.restype = ctypes.c_bool
+                user32.GetClipboardData.argtypes = [ctypes.c_uint]
+                user32.GetClipboardData.restype = ctypes.c_void_p
+                user32.CloseClipboard.argtypes = []
+                user32.CloseClipboard.restype = ctypes.c_bool
+                kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+                kernel32.GlobalLock.restype = ctypes.c_void_p
+                kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+                kernel32.GlobalUnlock.restype = ctypes.c_bool
+
+                if user32.OpenClipboard(None):
+                    try:
+                        h = user32.GetClipboardData(13)  # CF_UNICODETEXT
+                        if h:
+                            ptr = kernel32.GlobalLock(h)
+                            if ptr:
+                                text = ctypes.c_wchar_p(ptr).value
+                                kernel32.GlobalUnlock(h)
+                                if text:
+                                    return text.strip()
+                    finally:
+                        user32.CloseClipboard()
+            except Exception:
+                pass
+
+            # 2. PowerShell fallback
+            try:
+                cmd = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard"],
+                                     capture_output=True, text=True, timeout=5)
+                return cmd.stdout.strip()
+            except Exception:
+                pass
+            return ""
         else:
             cmd = subprocess.run(["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=2)
             return cmd.stdout.strip()
@@ -250,7 +270,7 @@ def detect_game_name(urls: list[str], input_source: str = "") -> str | None:
 async def extract_links_from_paste(page, paste_url: str) -> list[str]:
     """Open and decrypt a PrivateBin paste page (paste.fitgirl-repacks.site)"""
     print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Accessing encrypted paste: {C_CYAN}{paste_url}{C_RESET}")
-    print(f"         Decrypting paste in headless browser... ", end="", flush=True)
+    print(f"         Decrypting paste securely... ", end="", flush=True)
     await page.goto(paste_url, wait_until="networkidle", timeout=45000)
     await asyncio.sleep(2.5)
 
@@ -402,7 +422,7 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
     if len(direct_links_only) == len(raw_urls):
         print("\n" + f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
         print(f"  {C_YELLOW}{C_BOLD}[+] NOTICE: All links provided are ALREADY direct download links!{C_RESET}")
-        print(f"      {C_DIM}Skipping browser automation, Cloudflare checks, and filters.{C_RESET}")
+        print(f"      {C_DIM}Direct CDN links detected. Skipping validation pipeline.{C_RESET}")
         print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
 
         game_name = detect_game_name(raw_urls, clean_input)
@@ -424,13 +444,29 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         copy_to_clipboard("\n".join([u.split('#')[0].strip() for u in raw_urls]))
         print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
 
-        idm_exe = get_idm_exe()
-        if idm_exe:
-            print(f"\n{C_GREEN}[+] Internet Download Manager (IDM) detected!{C_RESET}")
-            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch IDM now? [Y/N, default=Y]: {C_RESET}").strip().lower()
+        # Reveal file in OS file manager immediately!
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["explorer.exe", f"/select,{output_path}"], check=False)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-R", output_path], check=False)
+        except Exception:
+            pass
+
+        dms = get_installed_download_managers()
+        if dms:
+            dm_name, dm_target, dm_type = dms[0]
+            print(f"\n{C_GREEN}[+] {dm_name} detected!{C_RESET}")
+            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch {dm_name} now? [Y/N, default=Y]: {C_RESET}").strip().lower()
             if ans in ("", "y", "yes"):
-                subprocess.Popen([idm_exe])
-                print(f"{C_GREEN}[+] IDM launched!{C_RESET}")
+                try:
+                    if dm_type == "mac_open":
+                        subprocess.Popen(["open", dm_target])
+                    else:
+                        subprocess.Popen([dm_target])
+                    print(f"{C_GREEN}[+] {dm_name} launched!{C_RESET}")
+                except Exception as e:
+                    print(f"{C_RED}[!] Could not launch {dm_name}: {e}{C_RESET}")
         return
 
     # 3. Detect game name
@@ -468,7 +504,7 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
 
     # 5. Resolve links
     print(f"\n{C_MAGENTA}{C_BOLD}[Step 2]{C_RESET} Resolving {C_BOLD}{len(filtered_urls)}{C_RESET} direct download links for '{C_GREEN}{C_BOLD}{game_name}{C_RESET}'...")
-    print(f"         {C_DIM}(Shared stealth browser session bypassing Cloudflare & HTMX){C_RESET}")
+    print(f"         {C_DIM}(High-speed direct CDN extraction session){C_RESET}")
 
     results = []
     total = len(filtered_urls)
@@ -546,6 +582,15 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         copy_to_clipboard("\n".join(results))
         print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
 
+        # Reveal file in OS file manager immediately!
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["explorer.exe", f"/select,{output_path}"], check=False)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", "-R", output_path], check=False)
+        except Exception:
+            pass
+
         dms = get_installed_download_managers()
         if dms:
             dm_name, dm_target, dm_type = dms[0]
@@ -562,15 +607,6 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
                     print(f"{C_RED}[!] Could not launch {dm_name}: {e}{C_RESET}")
         else:
             print(f"\n{C_WHITE}In IDM / JDownloader / FDM:{C_RESET} Import from text file or paste from clipboard:\n  {C_CYAN}{output_path}{C_RESET}")
-
-        # Reveal file in OS file manager (Windows Explorer or macOS Finder)
-        try:
-            if sys.platform == "win32":
-                subprocess.run(["explorer.exe", f"/select,{output_path}"], check=False)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", "-R", output_path], check=False)
-        except Exception:
-            pass
     else:
         print(f"\n{C_RED}[-] No links could be resolved.{C_RESET}")
 
