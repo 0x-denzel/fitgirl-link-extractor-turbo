@@ -1,18 +1,26 @@
 @echo off
 setlocal EnableDelayedExpansion
-title FitGirl ^& FuckingFast Direct Link Extractor for IDM
+title FitGirl ^& FuckingFast Link Extractor - by 0xdenzel
 chcp 65001 >nul
 color 0B
 
-echo ==============================================================================
-echo                 FITGIRL ^& FUCKINGFAST BATCH LINK EXTRACTOR
-echo ==============================================================================
-echo  This tool automatically extracts direct, IDM-ready download links from:
-echo   [1] FitGirl PrivateBin pastes  (e.g. paste.fitgirl-repacks.site/?id#key)
-echo   [2] FitGirl Repack game pages  (e.g. fitgirl-repacks.site/game-name/)
-echo   [3] Text files containing links (.txt)
-echo   [4] Raw FuckingFast links
-echo ==============================================================================
+echo  =============================================================================
+echo     ______ _ _    _____ _      _   _      _       _        
+echo    ^|  ____(_) ^|  / ____(_)    ^| ^| ^| ^|    (_)     ^| ^|       
+echo    ^| ^|__   _^| ^|_^| ^|  __ _ _ __^| ^| ^| ^|     _ _ __ ^| ^| _____ 
+echo    ^|  __^| ^| ^| __^| ^| ^|_ ^| ^| '__^| ^| ^| ^|    ^| ^| '_ \^| ^|/ / __^|
+echo    ^| ^|    ^| ^| ^|_^| ^|__^| ^| ^| ^|  ^| ^| ^| ^|____^| ^| ^| ^| ^|   ^<__ \
+echo    ^|_^|    ^|_^|\__^|\_____^|_^|_^|  ^|_^| ^|______^|_^|_^| ^|_^|_^|\_\___/
+echo.
+echo                       ^>^>^> BY 0xDENZEL ^<^<^<
+echo  =============================================================================
+echo   Automated direct link resolver for IDM ^& JDownloader
+echo   Supports:
+echo    [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
+echo    [+] FitGirl Repack game pages (fitgirl-repacks.site/game-name/)
+echo    [+] Text files containing links (.txt)
+echo    [+] Direct FuckingFast URLs
+echo  =============================================================================
 echo.
 
 :GET_INPUT
@@ -28,21 +36,34 @@ if "%INPUT%"=="" (
 set "INPUT=%INPUT:"=%"
 
 echo.
-echo ==============================================================================
-echo  Step 2: Optional Filters
-echo ==============================================================================
+echo =============================================================================
+echo  Step 2: Filters ^& Language Selection
+echo =============================================================================
 set "BONUS_OPT="
-set /p "EX_BONUS=>> Exclude optional bonus content (soundtracks/trailers)? [Y/N, default=N]: "
+set /p "EX_BONUS=>> Exclude optional bonus content (soundtracks/credits)? [Y/N, default=N]: "
 if /i "%EX_BONUS%"=="Y" set "BONUS_OPT=--no-bonus"
 
+echo.
+echo Language options:
+echo   [Y] Keep ENGLISH ONLY (skip other language voiceovers: French, German, Russian, etc.)
+echo   [N] Download ALL languages
+echo   [Or type a specific language: e.g. spanish, japanese, french]
+set /p "LANG_CHOICE=>> Your language choice [Y/N, default=Y]: "
+if "%LANG_CHOICE%"=="" set "LANG_CHOICE=Y"
+
 set "LANG_OPT="
-set /p "EX_LANG=>> Exclude selective/extra language packs? [Y/N, default=N]: "
-if /i "%EX_LANG%"=="Y" set "LANG_OPT=--no-lang"
+if /i "%LANG_CHOICE%"=="Y" (
+    set "LANG_OPT=--lang english"
+) else if /i "%LANG_CHOICE%"=="N" (
+    set "LANG_OPT="
+) else (
+    set "LANG_OPT=--lang %LANG_CHOICE%"
+)
 
 echo.
-echo ==============================================================================
+echo =============================================================================
 echo  Step 3: Processing (Running Headless Stealth Browser...)
-echo ==============================================================================
+echo =============================================================================
 echo.
 
 set "SCRIPT_PATH=%USERPROFILE%\Downloads\extract_ff_links.py"
@@ -62,9 +83,9 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo ==============================================================================
+echo =============================================================================
 echo  Step 4: IDM Integration
-echo ==============================================================================
+echo =============================================================================
 set "IDM_EXE=C:\Program Files (x86)\Internet Download Manager\IDMan.exe"
 if not exist "%IDM_EXE%" set "IDM_EXE=C:\Program Files\Internet Download Manager\IDMan.exe"
 
@@ -88,7 +109,7 @@ echo Opening Downloads folder with your links file...
 explorer.exe /select,"%USERPROFILE%\Downloads\idm_links.txt"
 
 echo.
-echo ==============================================================================
+echo =============================================================================
 echo  Done! Press any key to exit.
 echo ==============================================================================
 pause >nul

@@ -1,4 +1,13 @@
 """
+  ______ _ _    _____ _      _   _      _       _        
+ |  ____(_) |  / ____(_)    | | | |    (_)     | |       
+ | |__   _| |_| |  __ _ _ __| | | |     _ _ __ | | _____ 
+ |  __| | | __| | |_ | | '__| | | |    | | '_ \| |/ / __|
+ | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \
+ |_|    |_|\__|\_____|_|_|  |_| |______|_|_| |_|_|\_\___/
+                                                         
+                   >> BY 0xDENZEL <<                     
+
 Batch Link Extractor for FuckingFast & FitGirl Repacks (IDM Ready)
 Supports:
   - PrivateBin paste URLs (e.g. https://paste.fitgirl-repacks.site/?id#key)
@@ -19,6 +28,17 @@ from playwright_stealth import Stealth
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 DEFAULT_OUTPUT = os.path.join(DOWNLOAD_DIR, "idm_links.txt")
 IDM_PATH = r"C:\Program Files (x86)\Internet Download Manager\IDMan.exe"
+
+BANNER = r"""
+  ______ _ _    _____ _      _   _      _       _        
+ |  ____(_) |  / ____(_)    | | | |    (_)     | |       
+ | |__   _| |_| |  __ _ _ __| | | |     _ _ __ | | _____ 
+ |  __| | | __| | |_ | | '__| | | |    | | '_ \| |/ / __|
+ | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \
+ |_|    |_|\__|\_____|_|_|  |_| |______|_|_| |_|_|\_\___/
+                                                         
+                   >> BY 0xDENZEL <<                     
+"""
 
 
 def copy_to_clipboard(text: str):
@@ -133,7 +153,8 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
     return None
 
 
-async def run_pipeline(input_source: str, output_path: str, exclude_bonus: bool = False, exclude_lang: bool = False):
+async def run_pipeline(input_source: str, output_path: str, exclude_bonus: bool = False, keep_lang: str | None = None):
+    print(BANNER)
     print("=" * 65)
     print("      FITGIRL & FUCKINGFAST BATCH LINK EXTRACTOR")
     print("=" * 65)
@@ -141,7 +162,6 @@ async def run_pipeline(input_source: str, output_path: str, exclude_bonus: bool 
     raw_urls = []
 
     async with async_playwright() as p:
-        # Launch stealth Chrome instance
         launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
         try:
             browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
@@ -181,18 +201,33 @@ async def run_pipeline(input_source: str, output_path: str, exclude_bonus: bool 
             await browser.close()
             return
 
-        # Optional filters
+        # Smart Filtering:
+        # 1. Optional bonus files (fg-optional*)
+        # 2. Selective languages (fg-selective*): if keep_lang is set, keep ONLY matching language files
         filtered_urls = []
         for url in raw_urls:
             lower = url.lower()
             if exclude_bonus and "fg-optional" in lower:
                 continue
-            if exclude_lang and "fg-selective" in lower:
-                continue
+
+            if "fg-selective" in lower:
+                if keep_lang:
+                    # e.g. keep_lang="english" -> keeps fg-selective-english*.bin, drops all others
+                    if keep_lang.lower() in lower:
+                        filtered_urls.append(url)
+                    continue
+                else:
+                    # keep all languages if keep_lang is None
+                    filtered_urls.append(url)
+                    continue
+
             filtered_urls.append(url)
 
         if len(filtered_urls) < len(raw_urls):
-            print(f"      Applied filters: {len(filtered_urls)} links remaining (excluded bonus/languages).")
+            diff = len(raw_urls) - len(filtered_urls)
+            lang_note = f" (kept '{keep_lang}' only)" if keep_lang else ""
+            print(f"      Filter applied: excluded {diff} optional/foreign files{lang_note}.")
+            print(f"      {len(filtered_urls)} file(s) queued for download.")
 
         # Step 2: Resolve direct download links
         print(f"\n[2/3] Resolving {len(filtered_urls)} direct download links...")
@@ -243,11 +278,12 @@ def main():
     parser.add_argument("source", nargs="?", help="Pastebin URL, FitGirl page URL, text file path, or link")
     parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT, help=f"Output file (default: {DEFAULT_OUTPUT})")
     parser.add_argument("--no-bonus", action="store_true", help="Exclude bonus files (fg-optional*)")
-    parser.add_argument("--no-lang", action="store_true", help="Exclude selective language files (fg-selective*)")
+    parser.add_argument("--lang", default=None, help="Keep ONLY this selective language (e.g. english, french, german)")
     args = parser.parse_args()
 
     source = args.source
     if not source:
+        print(BANNER)
         print("=" * 65)
         print("      FITGIRL & FUCKINGFAST BATCH LINK EXTRACTOR")
         print("=" * 65)
@@ -264,7 +300,7 @@ def main():
         return
 
     output = os.path.abspath(args.output)
-    asyncio.run(run_pipeline(source, output, args.no_bonus, args.no_lang))
+    asyncio.run(run_pipeline(source, output, args.no_bonus, args.lang))
 
 
 if __name__ == "__main__":
