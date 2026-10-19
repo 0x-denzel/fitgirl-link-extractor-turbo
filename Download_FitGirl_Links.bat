@@ -12,6 +12,8 @@ import datetime
 import subprocess
 import argparse
 import random
+import webbrowser
+import urllib.request
 
 # Enable Windows ANSI Virtual Terminal Colors and UTF-8 output
 if sys.platform == "win32":
@@ -58,6 +60,7 @@ if missing_pkgs:
 
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
+from bs4 import BeautifulSoup
 
 DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
 
@@ -86,8 +89,9 @@ BANNER = f"""
    [+] FuckingFast (fuckingfast.co) - Instant CDN Direct Links
    [+] FileKeeper (filekeeper.net) - High-Speed Turbo Tunnel Mirrors
    [+] DataNodes (datanodes.to) - Direct Cloud Storage Mirrors
+   [+] Torrent & Magnet Mirrors (1337x, Magnet URI, .torrent file download)
    [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
-   [+] FitGirl Repack game pages (fitgirl-repacks.site/game-name/)
+   [+] FitGirl Repack game pages with interactive mirror selector
    [+] Instant passthrough for already direct links (.dlproxy.uk, /dl/, /d/){C_RESET}
 {C_CYAN}{C_BOLD} ============================================================================={C_RESET}
 """
@@ -336,6 +340,251 @@ async def extract_links_from_fitgirl_page(page, repack_url: str) -> list[str]:
 
     print(f"         Found {C_BOLD}{len(links)}{C_RESET} link(s) on repack page.")
     return links
+
+
+def scrape_fitgirl_repack_mirrors(repack_url: str) -> dict | None:
+    """Fast-scrape all Direct Download (FileKeeper, FuckingFast, DataNodes) and Torrent (Magnet, .torrent, 1337x, etc.) mirrors from a FitGirl repack page."""
+    try:
+        req = urllib.request.Request(repack_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        })
+        html = urllib.request.urlopen(req, timeout=15).read().decode('utf-8', errors='replace')
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Extract game title
+        game_title = ""
+        h1 = soup.find('h1', class_='entry-title')
+        if h1:
+            game_title = h1.get_text().strip()
+        elif soup.title:
+            game_title = soup.title.get_text().split(' - ')[0].strip()
+
+        # Clean title
+        game_title = re.sub(r'[\–\—\-]\s*v?\d.*$', '', game_title).strip()
+        if not game_title:
+            game_title = "FitGirl_Repack"
+
+        direct_mirrors = []
+        torrent_mirrors = []
+        seen_direct = set()
+        seen_torrent = set()
+
+        for a in soup.find_all('a'):
+            txt = a.get_text().strip()
+            href = a.get('href') or ''
+            lower_txt = txt.lower()
+            lower_href = href.lower()
+
+            # 1. Direct Download Mirrors
+            if 'paste.fitgirl-repacks.site' in lower_href or any(h in lower_href for h in ['fuckingfast.co', 'filekeeper.net', 'datanodes.to']):
+                if '.torrent' not in lower_txt and 'torrent' not in lower_txt:
+                    hoster = None
+                    if 'filekeeper' in lower_txt or 'filekeeper' in lower_href:
+                        hoster = 'FileKeeper'
+                    elif 'fuckingfast' in lower_txt or 'fuckingfast' in lower_href:
+                        hoster = 'FuckingFast'
+                    elif 'datanodes' in lower_txt or 'datanodes' in lower_href:
+                        hoster = 'DataNodes'
+
+                    if hoster and hoster not in seen_direct:
+                        seen_direct.add(hoster)
+                        tag = 'Recommended (Ultra-fast tunnel, ~1.5s/link, 0 countdown)' if hoster == 'FileKeeper' else ('High-Speed Direct CDN (~2.5s/link)' if hoster == 'FuckingFast' else 'Cloud Storage Mirror')
+                        direct_mirrors.append({'name': hoster, 'url': href, 'tag': tag})
+
+            # 2. Torrent Mirrors
+            if href.startswith('magnet:') and 'Magnet Link' not in seen_torrent:
+                seen_torrent.add('Magnet Link')
+                torrent_mirrors.append({'name': 'Magnet Link', 'type': 'magnet', 'url': href, 'tag': 'Instant 1-click launch in torrent client'})
+            elif '.torrent file' in lower_txt and '.torrent File Download' not in seen_torrent:
+                seen_torrent.add('.torrent File Download')
+                torrent_mirrors.append({'name': '.torrent File Download', 'type': 'torrent_file', 'url': href, 'tag': 'Direct .torrent file download to Downloads'})
+            elif ('1337x' in lower_txt or '1337x.to' in lower_href) and '1337x Torrent Page' not in seen_torrent:
+                seen_torrent.add('1337x Torrent Page')
+                torrent_mirrors.append({'name': '1337x Torrent Page', 'type': 'web', 'url': href, 'tag': 'Open tracker page in web browser'})
+            elif 'tapochek.net' in lower_href and 'Tapochek.net' not in seen_torrent:
+                seen_torrent.add('Tapochek.net')
+                torrent_mirrors.append({'name': 'Tapochek.net Tracker', 'type': 'web', 'url': href, 'tag': 'Russian tracker mirror'})
+            elif 'rutor.info' in lower_href and 'RuTor' not in seen_torrent:
+                seen_torrent.add('RuTor')
+                torrent_mirrors.append({'name': 'RuTor Tracker', 'type': 'web', 'url': href, 'tag': 'RuTor tracker mirror'})
+
+        # Sort direct mirrors: FileKeeper first, FuckingFast second, DataNodes third
+        order = {'FileKeeper': 0, 'FuckingFast': 1, 'DataNodes': 2}
+        direct_mirrors.sort(key=lambda m: order.get(m['name'], 99))
+
+        return {
+            'game_title': game_title,
+            'direct_mirrors': direct_mirrors,
+            'torrent_mirrors': torrent_mirrors
+        }
+    except Exception:
+        return None
+
+
+async def download_torrent_attachment(page, paste_url: str, output_dir: str = DOWNLOAD_DIR) -> str | None:
+    """Download .torrent file attachment from a PrivateBin paste and save directly to Downloads"""
+    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Accessing encrypted .torrent paste: {C_CYAN}{paste_url}{C_RESET}")
+    print(f"         Decrypting .torrent attachment... ", end="", flush=True)
+    await page.goto(paste_url, wait_until="networkidle", timeout=45000)
+    await asyncio.sleep(2)
+    print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
+
+    att = page.locator('a:has-text("Download attachment")')
+    if await att.count() > 0:
+        print(f"         Saving .torrent file to Downloads... ", end="", flush=True)
+        async with page.expect_download(timeout=15000) as download_info:
+            await att.first.click()
+        download = await download_info.value
+        filename = download.suggested_filename or "game.torrent"
+        os.makedirs(output_dir, exist_ok=True)
+        save_path = os.path.join(output_dir, filename)
+        await download.save_as(save_path)
+        print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
+        return save_path
+    return None
+
+
+async def handle_repack_mirror_selection(repack_url: str):
+    """Scan repack page for all direct and torrent mirrors and let user select interactively"""
+    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Inspecting FitGirl repack page: {C_CYAN}{repack_url}{C_RESET}")
+    print(f"         Scanning all available download mirrors... ", end="", flush=True)
+
+    data = scrape_fitgirl_repack_mirrors(repack_url)
+    if not data or (not data['direct_mirrors'] and not data['torrent_mirrors']):
+        print(f"{C_YELLOW}DONE (Direct parse){C_RESET}")
+        await run_pipeline(repack_url)
+        return
+
+    print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
+    game_title = data['game_title']
+    direct = data['direct_mirrors']
+    torrent = data['torrent_mirrors']
+
+    print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+    print(f"  {C_WHITE}Repack Detected:{C_RESET} {C_GREEN}{C_BOLD}{game_title}{C_RESET}")
+    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+
+    options = []
+    idx = 1
+
+    if direct:
+        print(f"\n{C_WHITE}{C_BOLD}--- DIRECT DOWNLOAD HOSTERS (IDM / JDownloader / FDM) ---{C_RESET}")
+        for m in direct:
+            rec_tag = f" {C_YELLOW}[Recommended]{C_RESET}" if m['name'] == 'FileKeeper' else ""
+            print(f"  {C_GREEN}[{idx}]{C_RESET} {C_BOLD}{m['name']:<12}{C_RESET} ➜ {m['tag']}{rec_tag}")
+            options.append(('direct', m))
+            idx += 1
+
+    if torrent:
+        print(f"\n{C_WHITE}{C_BOLD}--- TORRENT & MAGNET MIRRORS (qBittorrent / BitTorrent) ---{C_RESET}")
+        for m in torrent:
+            print(f"  {C_CYAN}[{idx}]{C_RESET} {C_BOLD}{m['name']:<28}{C_RESET} ➜ {m['tag']}")
+            options.append(('torrent', m))
+            idx += 1
+
+    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+    ans = input(f"{C_WHITE}{C_BOLD}>> Select download option [1-{len(options)}, default=1]: {C_RESET}").strip()
+
+    choice_idx = 0
+    if ans.isdigit():
+        val = int(ans)
+        if 1 <= val <= len(options):
+            choice_idx = val - 1
+
+    opt_type, item = options[choice_idx]
+
+    if opt_type == 'direct':
+        print(f"\n{C_GREEN}[+] Selected Direct Hoster:{C_RESET} {C_BOLD}{item['name']}{C_RESET}")
+        target_url = item['url']
+
+        print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+        print(f"{C_BOLD}Filters & Language Preferences{C_RESET}")
+        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+
+        ans_bonus = input(f"{C_WHITE}{C_BOLD}>> Exclude optional bonus content (soundtracks/trailers)? [Y/N, default=N]: {C_RESET}").strip().lower()
+        exclude_bonus = (ans_bonus == "y")
+
+        print(f"\n{C_BOLD}Language options:{C_RESET}")
+        print(f"  {C_GREEN}[Y]{C_RESET} Keep ENGLISH ONLY (skip other language voiceovers) {C_YELLOW}[Recommended]{C_RESET}")
+        print(f"  {C_WHITE}[N]{C_RESET} Download ALL languages")
+        print(f"  {C_DIM}[Or type a specific language: e.g. spanish, japanese, french]{C_RESET}")
+        ans_lang = input(f"{C_WHITE}{C_BOLD}>> Your language choice [Y/N, default=Y]: {C_RESET}").strip().lower()
+
+        if ans_lang in ("", "y", "yes"):
+            keep_lang = "english"
+        elif ans_lang == "n":
+            keep_lang = None
+        else:
+            keep_lang = ans_lang
+
+        await run_pipeline(target_url, None, exclude_bonus, keep_lang)
+
+    elif opt_type == 'torrent':
+        sub_type = item.get('type')
+        if sub_type == 'magnet':
+            mag_url = item['url']
+            print(f"\n{C_GREEN}[+] Magnet Link Extracted:{C_RESET}")
+            print(f"    {C_CYAN}{mag_url[:120]}...{C_RESET}")
+            copy_to_clipboard(mag_url)
+            ans = input(f"\n{C_WHITE}{C_BOLD}>> Open in default torrent client (qBittorrent / BitTorrent)? [Y/N, default=Y]: {C_RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
+                try:
+                    if sys.platform == "win32":
+                        subprocess.Popen(["start", "", mag_url], shell=True)
+                    elif sys.platform == "darwin":
+                        subprocess.Popen(["open", mag_url])
+                    print(f"{C_GREEN}[+] Torrent client launched!{C_RESET}")
+                except Exception as e:
+                    print(f"{C_RED}[!] Could not launch torrent client: {e}{C_RESET}")
+
+        elif sub_type == 'torrent_file':
+            paste_url = item['url']
+            print(f"\n{C_GREEN}[+] Downloading .torrent file from encrypted paste...{C_RESET}")
+            async with async_playwright() as p:
+                launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+                try:
+                    browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
+                except Exception:
+                    browser = await p.chromium.launch(headless=True, args=launch_args)
+                page = await browser.new_page()
+                await Stealth().apply_stealth_async(page)
+                saved_path = await download_torrent_attachment(page, paste_url, DOWNLOAD_DIR)
+                await browser.close()
+
+            if saved_path and os.path.isfile(saved_path):
+                print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+                print(f"  {C_GREEN}{C_BOLD}SUCCESS: .torrent file saved!{C_RESET}")
+                print(f"  File: {C_GREEN}{C_BOLD}{os.path.basename(saved_path)}{C_RESET}")
+                print(f"  Saved to: {C_CYAN}{saved_path}{C_RESET}")
+                copy_to_clipboard(saved_path)
+                print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+
+                try:
+                    if sys.platform == "win32":
+                        subprocess.run(["explorer.exe", f"/select,{saved_path}"], check=False)
+                    elif sys.platform == "darwin":
+                        subprocess.run(["open", "-R", saved_path], check=False)
+                except Exception:
+                    pass
+
+                ans = input(f"\n{C_WHITE}{C_BOLD}>> Open .torrent file in torrent client now? [Y/N, default=Y]: {C_RESET}").strip().lower()
+                if ans in ("", "y", "yes"):
+                    try:
+                        if sys.platform == "win32":
+                            os.startfile(saved_path)
+                        elif sys.platform == "darwin":
+                            subprocess.Popen(["open", saved_path])
+                        print(f"{C_GREEN}[+] Opened .torrent file in torrent client!{C_RESET}")
+                    except Exception as e:
+                        print(f"{C_RED}[!] Could not open torrent file: {e}{C_RESET}")
+            else:
+                print(f"{C_RED}[!] Could not download .torrent file from paste.{C_RESET}")
+
+        elif sub_type == 'web':
+            web_url = item['url']
+            print(f"\n{C_GREEN}[+] Opening tracker page in default browser:{C_RESET} {C_CYAN}{web_url}{C_RESET}")
+            copy_to_clipboard(web_url)
+            webbrowser.open(web_url)
 
 
 async def extract_fuckingfast(page, url: str, retries: int = 3) -> str | None:
@@ -878,26 +1127,34 @@ def interactive_menu():
     src = ""
 
     if p_links or r_links or h_links:
-        desc_parts = []
-        if p_links:
-            desc_parts.append(f"{len(p_links)} FitGirl Pastebin URL(s)")
-        if r_links:
-            desc_parts.append(f"{len(r_links)} FitGirl Repack Page(s)")
-        if h_links:
-            ff_c = sum(1 for u in h_links if "fuckingfast" in u)
-            fk_c = sum(1 for u in h_links if "filekeeper" in u)
-            dn_c = sum(1 for u in h_links if "datanodes" in u)
-            h_details = []
-            if ff_c: h_details.append(f"{ff_c} FuckingFast")
-            if fk_c: h_details.append(f"{fk_c} FileKeeper")
-            if dn_c: h_details.append(f"{dn_c} DataNodes")
-            desc_parts.append(f"{len(h_links)} link(s) [{', '.join(h_details)}]")
+        if r_links and not p_links and not h_links:
+            print(f"{C_GREEN}[+] Clipboard auto-detect: Found FitGirl Repack Page in your Clipboard!{C_RESET}")
+            print(f"    {C_CYAN}{r_links[0]}{C_RESET}")
+            ans = input(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to inspect mirrors & choose download, or type [P] to paste manually: {C_RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
+                asyncio.run(handle_repack_mirror_selection(r_links[0]))
+                return
+        else:
+            desc_parts = []
+            if p_links:
+                desc_parts.append(f"{len(p_links)} FitGirl Pastebin URL(s)")
+            if r_links:
+                desc_parts.append(f"{len(r_links)} FitGirl Repack Page(s)")
+            if h_links:
+                ff_c = sum(1 for u in h_links if "fuckingfast" in u)
+                fk_c = sum(1 for u in h_links if "filekeeper" in u)
+                dn_c = sum(1 for u in h_links if "datanodes" in u)
+                h_details = []
+                if ff_c: h_details.append(f"{ff_c} FuckingFast")
+                if fk_c: h_details.append(f"{fk_c} FileKeeper")
+                if dn_c: h_details.append(f"{dn_c} DataNodes")
+                desc_parts.append(f"{len(h_links)} link(s) [{', '.join(h_details)}]")
 
-        desc = " and ".join(desc_parts)
-        print(f"{C_GREEN}[+] Clipboard auto-detect: Found {C_BOLD}{desc}{C_RESET}{C_GREEN} in your Clipboard!{C_RESET}")
-        ans = input(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to use your clipboard, or type [P] to paste manually: {C_RESET}").strip().lower()
-        if ans in ("", "y", "yes"):
-            src = clip_text
+            desc = " and ".join(desc_parts)
+            print(f"{C_GREEN}[+] Clipboard auto-detect: Found {C_BOLD}{desc}{C_RESET}{C_GREEN} in your Clipboard!{C_RESET}")
+            ans = input(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to use your clipboard, or type [P] to paste manually: {C_RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
+                src = clip_text
 
     if not src:
         print(f"\n{C_WHITE}{C_BOLD}>> Paste your URL, file path, or batch links below:{C_RESET}")
@@ -922,6 +1179,10 @@ def interactive_menu():
         return
 
     p_check, r_check, h_check = inspect_input(src)
+    if r_check and not p_check and not h_check:
+        asyncio.run(handle_repack_mirror_selection(r_check[0]))
+        return
+
     if h_check and not p_check and not r_check:
         direct_check = [u for u in h_check if is_direct_link(u)]
         if len(direct_check) == len(h_check):
@@ -973,6 +1234,10 @@ def main():
                     break
                 print("\n" * 2)
         else:
+            p_check, r_check, h_check = inspect_input(args.source)
+            if r_check and not p_check and not h_check:
+                asyncio.run(handle_repack_mirror_selection(r_check[0]))
+                return
             keep_lang = None if args.lang.lower() in ("all", "none") else args.lang
             asyncio.run(run_pipeline(args.source, args.output, args.no_bonus, keep_lang))
     except KeyboardInterrupt:

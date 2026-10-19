@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.0] - 2026-10-20
+### Added
+- **Interactive Repack Mirror Selector**: Pasting any FitGirl repack game page URL (e.g. `fitgirl-repacks.site/game-name/`) automatically fast-scrapes all available mirrors in ~300ms using zero-browser parsing, displaying an interactive numbered menu.
+- **Direct Download vs Torrent Mirror Grouping**: Categorizes links into Direct Hosters (FileKeeper, FuckingFast, DataNodes) and Torrent & Magnet mirrors.
+- **Torrent & Magnet Integration**:
+  - **Magnet Link**: One-click extraction, automatic clipboard copy, and optional auto-launch in default torrent client (qBittorrent / BitTorrent).
+  - **.torrent File Attachment Downloader**: Silently decrypts PrivateBin `.torrent` file attachments in the background, downloads the `.torrent` file into `~/Downloads/`, highlights in Windows Explorer / macOS Finder, and prompts to launch in torrent client.
+  - **Tracker Pages (1337x / Tapochek / RuTor)**: Direct 1-click clipboard copy and browser launcher.
+- **Graceful Cancellation & Progress Preservation**: Intercepts `Ctrl+C` interrupt cleanly without crashing, instantly saving whatever links were already resolved to file, copying them to clipboard, and highlighting in File Explorer.
+
 ## [v1.1.0] - 2026-10-20
 ### Added
 - **Multi-Hoster Engine Rebrand**: Renamed and upgraded engine to **FitGirl Turbo Link Extractor** supporting **FuckingFast (`fuckingfast.co`)**, **FileKeeper (`filekeeper.net`)**, and **DataNodes (`datanodes.to`)**.
@@ -11,7 +21,6 @@ All notable changes to this project will be documented in this file.
 - **Accurate URL Filename & Game Detection**: Extracts clean game names directly from URL path basenames (e.g. `CoD_MW4`) in addition to PrivateBin anchors and page slugs.
 - **Multi-Hoster Direct Passthrough**: Instantly recognizes direct CDN links (`dlproxy.uk`, `dl.fuckingfast.co/dl/`, `datanodes.to/d/`) and bypasses browser execution.
 - **Windows UTF-8 Terminal Fix**: Reconfigured `sys.stdout` to UTF-8 output on Windows to eliminate `cp1252` encoding errors during in-place progress updates.
-- **Graceful Cancellation & Progress Preservation**: Intercepts `Ctrl+C` interrupt cleanly without crashing, instantly saving whatever links were already resolved to file, copying them to clipboard, and highlighting in File Explorer.
 - **Updated Desktop Folder**: Consolidated all user release files in `Desktop\FitGirl-Link-Extractor`.
 
 ## [v1.0.1] - 2026-10-19
