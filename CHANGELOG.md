@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - **Accurate URL Filename & Game Detection**: Extracts clean game names directly from URL path basenames (e.g. `CoD_MW4`) in addition to PrivateBin anchors and page slugs.
 - **Multi-Hoster Direct Passthrough**: Instantly recognizes direct CDN links (`dlproxy.uk`, `dl.fuckingfast.co/dl/`, `datanodes.to/d/`) and bypasses browser execution.
 - **Windows UTF-8 Terminal Fix**: Reconfigured `sys.stdout` to UTF-8 output on Windows to eliminate `cp1252` encoding errors during in-place progress updates.
+- **Graceful Cancellation & Progress Preservation**: Intercepts `Ctrl+C` interrupt cleanly without crashing, instantly saving whatever links were already resolved to file, copying them to clipboard, and highlighting in File Explorer.
 - **Updated Desktop Folder**: Consolidated all user release files in `Desktop\FitGirl-Link-Extractor`.
 
 ## [v1.0.1] - 2026-10-19

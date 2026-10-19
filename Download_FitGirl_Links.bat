@@ -743,77 +743,87 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
 
     # 5. Resolve links
     print(f"\n{C_MAGENTA}{C_BOLD}[Step 2]{C_RESET} Resolving {C_BOLD}{len(filtered_urls)}{C_RESET} direct download links for '{C_GREEN}{C_BOLD}{game_name}{C_RESET}'...")
-    print(f"         {C_DIM}(High-speed direct CDN extraction session){C_RESET}")
+    print(f"         {C_DIM}(High-speed direct CDN extraction session - press Ctrl+C anytime to stop & save){C_RESET}")
 
     results = []
     total = len(filtered_urls)
+    interrupted = False
 
-    async with async_playwright() as p:
-        launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
-        try:
-            browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
-        except Exception:
-            browser = await p.chromium.launch(headless=True, args=launch_args)
+    try:
+        async with async_playwright() as p:
+            launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+            try:
+                browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
+            except Exception:
+                browser = await p.chromium.launch(headless=True, args=launch_args)
 
-        if sys.platform == "darwin":
-            ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        else:
-            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
-        context = await browser.new_context(
-            user_agent=ua,
-            locale="en-US",
-            timezone_id="America/New_York",
-            viewport={"width": 1920, "height": 1080},
-        )
-        page = await context.new_page()
-        # Auto-suppress any popup ad tab across the context
-        context.on("page", lambda p: asyncio.create_task(p.close()) if p != page else None)
-        await Stealth().apply_stealth_async(page)
-
-        for i, url in enumerate(filtered_urls, 1):
-            if '#' in url:
-                name_hint = url.split('#')[-1]
-            elif '/' in url:
-                name_hint = url.split('/')[-1]
+            if sys.platform == "darwin":
+                ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             else:
-                name_hint = f"Part {i}"
+                ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-            pct = int((i - 1) / total * 100)
-            bar_len = 14
-            filled = int(bar_len * (i - 1) / total)
-            bar = "█" * filled + "░" * (bar_len - filled)
+            context = await browser.new_context(
+                user_agent=ua,
+                locale="en-US",
+                timezone_id="America/New_York",
+                viewport={"width": 1920, "height": 1080},
+            )
+            page = await context.new_page()
+            # Auto-suppress any popup ad tab across the context
+            context.on("page", lambda p: asyncio.create_task(p.close()) if p != page else None)
+            await Stealth().apply_stealth_async(page)
 
-            if is_direct_link(url):
+            for i, url in enumerate(filtered_urls, 1):
+                if '#' in url:
+                    name_hint = url.split('#')[-1]
+                elif '/' in url:
+                    name_hint = url.split('/')[-1]
+                else:
+                    name_hint = f"Part {i}"
+
+                pct = int((i - 1) / total * 100)
+                bar_len = 14
+                filled = int(bar_len * (i - 1) / total)
+                bar = "█" * filled + "░" * (bar_len - filled)
+
+                if is_direct_link(url):
+                    pct_done = int(i / total * 100)
+                    bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
+                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_YELLOW}(Direct) OK!{C_RESET}     ")
+                    sys.stdout.flush()
+                    results.append(url.split('#')[0].strip())
+                    continue
+
+                # Inline display with ASCII redirect icon while resolving
+                sys.stdout.write(f"\r  [{i}/{total}] {pct:3d}% |{bar}| {name_hint[:32]} ➜ {C_CYAN}Resolving...{C_RESET}     ")
+                sys.stdout.flush()
+
+                direct = await extract_direct_download(page, url)
                 pct_done = int(i / total * 100)
                 bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
-                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_YELLOW}(Direct) OK!{C_RESET}     ")
+                if direct == "REMOVED":
+                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}[REMOVED/404]{C_RESET}     ")
+                elif direct:
+                    results.append(direct)
+                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_GREEN}{C_BOLD}OK!{C_RESET}     ")
+                else:
+                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}FAILED{C_RESET}     ")
                 sys.stdout.flush()
-                results.append(url.split('#')[0].strip())
-                continue
+                await asyncio.sleep(random.uniform(0.6, 1.2))
 
-            # Inline display with ASCII redirect icon while resolving
-            sys.stdout.write(f"\r  [{i}/{total}] {pct:3d}% |{bar}| {name_hint[:32]} ➜ {C_CYAN}Resolving...{C_RESET}     ")
-            sys.stdout.flush()
-
-            direct = await extract_direct_download(page, url)
-            pct_done = int(i / total * 100)
-            bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
-            if direct == "REMOVED":
-                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}[REMOVED/404]{C_RESET}     ")
-            elif direct:
-                results.append(direct)
-                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_GREEN}{C_BOLD}OK!{C_RESET}     ")
-            else:
-                sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}FAILED{C_RESET}     ")
-            sys.stdout.flush()
-            await asyncio.sleep(random.uniform(0.6, 1.2))
-
+            sys.stdout.write("\n")
+            await browser.close()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        interrupted = True
         sys.stdout.write("\n")
-        await browser.close()
+        print(f"\n{C_YELLOW}{C_BOLD}[!] Cancellation requested by user (Ctrl+C).{C_RESET}")
 
     # 6. Finalize output
-    print(f"\n{C_MAGENTA}{C_BOLD}[Step 3]{C_RESET} Finalizing results...")
+    if interrupted:
+        print(f"\n{C_MAGENTA}{C_BOLD}[Step 3]{C_RESET} Preserving partially resolved links...")
+    else:
+        print(f"\n{C_MAGENTA}{C_BOLD}[Step 3]{C_RESET} Finalizing results...")
+
     if results:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
@@ -821,7 +831,10 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
                 f.write(link + "\n")
 
         print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-        print(f"  {C_GREEN}{C_BOLD}SUCCESS: {len(results)}/{len(filtered_urls)} direct links resolved!{C_RESET}")
+        if interrupted:
+            print(f"  {C_YELLOW}{C_BOLD}PARTIALLY SAVED: {len(results)}/{len(filtered_urls)} direct links preserved!{C_RESET}")
+        else:
+            print(f"  {C_GREEN}{C_BOLD}SUCCESS: {len(results)}/{len(filtered_urls)} direct links resolved!{C_RESET}")
         print(f"  Game: {C_GREEN}{C_BOLD}{game_name}{C_RESET}")
         print(f"  Saved to file: {C_CYAN}{output_path}{C_RESET}")
         copy_to_clipboard("\n".join(results))
@@ -946,21 +959,24 @@ def main():
     parser.add_argument("--lang", default="english", help="Keep ONLY this selective language (default: english, or 'all')")
     args = parser.parse_args()
 
-    if not args.source:
-        while True:
-            interactive_menu()
-            print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-            print(f"{C_WHITE}{C_BOLD}>> What would you like to do next?{C_RESET}")
-            print(f"   {C_GREEN}[1]{C_RESET} Process another game / paste new links {C_YELLOW}(Start afresh){C_RESET}")
-            print(f"   {C_RED}[2]{C_RESET} Exit")
-            choice = input(f"{C_WHITE}{C_BOLD}>> Choice [1/2, default=2]: {C_RESET}").strip().lower()
-            if choice not in ("1", "again", "y", "yes", "afresh"):
-                print(f"\n{C_GREEN}All done! Happy downloading.{C_RESET}\n")
-                break
-            print("\n" * 2)
-    else:
-        keep_lang = None if args.lang.lower() in ("all", "none") else args.lang
-        asyncio.run(run_pipeline(args.source, args.output, args.no_bonus, keep_lang))
+    try:
+        if not args.source:
+            while True:
+                interactive_menu()
+                print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+                print(f"{C_WHITE}{C_BOLD}>> What would you like to do next?{C_RESET}")
+                print(f"   {C_GREEN}[1]{C_RESET} Process another game / paste new links {C_YELLOW}(Start afresh){C_RESET}")
+                print(f"   {C_RED}[2]{C_RESET} Exit")
+                choice = input(f"{C_WHITE}{C_BOLD}>> Choice [1/2, default=2]: {C_RESET}").strip().lower()
+                if choice not in ("1", "again", "y", "yes", "afresh"):
+                    print(f"\n{C_GREEN}All done! Happy downloading.{C_RESET}\n")
+                    break
+                print("\n" * 2)
+        else:
+            keep_lang = None if args.lang.lower() in ("all", "none") else args.lang
+            asyncio.run(run_pipeline(args.source, args.output, args.no_bonus, keep_lang))
+    except KeyboardInterrupt:
+        print(f"\n\n{C_YELLOW}[!] Session stopped cleanly.{C_RESET}\n")
 
 
 if __name__ == "__main__":
