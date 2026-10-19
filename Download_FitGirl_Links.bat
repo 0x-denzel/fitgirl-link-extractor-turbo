@@ -11,7 +11,21 @@ import datetime
 import subprocess
 import argparse
 
-# Check and auto-install required dependencies if missing
+# Enable Windows ANSI Virtual Terminal Colors
+os.system('')
+
+# Color Palette
+C_CYAN = "\033[96m"
+C_GREEN = "\033[92m"
+C_YELLOW = "\033[93m"
+C_RED = "\033[91m"
+C_MAGENTA = "\033[95m"
+C_WHITE = "\033[97m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_RESET = "\033[0m"
+
+# Auto-check and install required dependencies on first launch
 REQUIRED_PACKAGES = {
     "playwright": "playwright",
     "playwright_stealth": "playwright-stealth",
@@ -27,12 +41,12 @@ for mod, pkg in REQUIRED_PACKAGES.items():
         missing_pkgs.append(pkg)
 
 if missing_pkgs:
-    print(f"\n[!] First-time setup: Installing required libraries ({', '.join(missing_pkgs)})...")
+    print(f"\n{C_YELLOW}[!] First-time setup: Installing required libraries ({', '.join(missing_pkgs)})...{C_RESET}")
     try:
         subprocess.run([sys.executable, "-m", "pip", "install"] + missing_pkgs, check=True)
-        print("[+] Dependencies successfully installed!\n")
+        print(f"{C_GREEN}[+] Dependencies successfully installed!{C_RESET}\n")
     except Exception as e:
-        print(f"[!] Warning: Could not auto-install dependencies: {e}")
+        print(f"{C_RED}[!] Warning: Could not auto-install dependencies: {e}{C_RESET}")
 
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -43,25 +57,25 @@ IDM_PATHS = [
     r"C:\Program Files\Internet Download Manager\IDMan.exe"
 ]
 
-BANNER = r"""
- =============================================================================
+BANNER = f"""
+{C_CYAN}{C_BOLD} =============================================================================
     ______ _ _    _____ _      _   _      _       _        
    |  ____(_) |  / ____(_)    | | | |    (_)     | |       
    | |__   _| |_| |  __ _ _ __| | | |     _ _ __ | | _____ 
    |  __| | | __| | |_ | | '__| | | |    | | '_ \| |/ / __|
-   | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \
+   | |    | | |_| |__| | | |  | | | |____| | | | |   <\__ \\
    |_|    |_|\__|\_____|_|_|  |_| |______|_|_| |_|_|\_\___/
 
-                      >>> BY 0xDENZEL <<<
- =============================================================================
-  Automated direct link resolver for IDM & JDownloader
-  Supports:
+                      {C_YELLOW}>>> BY 0xDENZEL <<<{C_CYAN}{C_BOLD}
+ ============================================================================={C_RESET}
+  {C_WHITE}Automated direct link resolver for IDM & JDownloader{C_RESET}
+  {C_DIM}Supports:
    [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
    [+] FitGirl Repack game pages (fitgirl-repacks.site/game-name/)
-   [+] Text files containing links (.txt)
-   [+] Direct FuckingFast URLs & batch pasted lists (with/without bullets)
-   [+] Pre-resolved direct links (https://dl.fuckingfast.co/dl/...)
- =============================================================================
+   [+] Raw FuckingFast links (single or multi-line with/without bullets)
+   [+] Text files (.txt) containing links
+   [+] Instant passthrough for already direct links (dl.fuckingfast.co/dl/...){C_RESET}
+{C_CYAN}{C_BOLD} ============================================================================={C_RESET}
 """
 
 
@@ -79,7 +93,7 @@ def copy_to_clipboard(text: str):
     """Copy text to Windows clipboard using clip.exe"""
     try:
         subprocess.run(["clip.exe"], input=text.strip().encode("utf-8"), check=True)
-        print("  [+] Copied all direct links to Windows Clipboard!")
+        print(f"  {C_GREEN}[+] Copied all direct links to Windows Clipboard!{C_RESET}")
     except Exception:
         pass
 
@@ -97,7 +111,6 @@ def parse_links_from_text(raw_text: str) -> list[str]:
     seen = set()
     links = []
     for l in found:
-        # Strip trailing markdown/punctuation
         clean = l.rstrip('.,;*)\'"')
         if clean not in seen:
             seen.add(clean)
@@ -105,8 +118,17 @@ def parse_links_from_text(raw_text: str) -> list[str]:
     return links
 
 
-def detect_game_name(urls: list[str], input_source: str = "") -> str:
-    """Automatically detect game name from repack page URL, anchors (#Game_Name_--_...), or files"""
+def inspect_input(raw_text: str):
+    """Inspect text and find all pastebin links, repack page links, and direct/raw FF links"""
+    paste_links = re.findall(r'https?://paste\.fitgirl-repacks\.site/[^\s"\'<>]+', raw_text)
+    repack_links = [u for u in re.findall(r'https?://fitgirl-repacks\.site/[^\s"\'<>]+', raw_text)
+                    if not u.startswith("https://paste.") and not u.startswith("http://paste.")]
+    ff_links = parse_links_from_text(raw_text)
+    return paste_links, repack_links, ff_links
+
+
+def detect_game_name(urls: list[str], input_source: str = "") -> str | None:
+    """Detect game name from repack page URL, anchors (#Game_Name_--_...), or local file name"""
     # 1. Check FitGirl game page URL
     if "fitgirl-repacks.site" in input_source and "paste." not in input_source:
         clean = input_source.strip().rstrip('/')
@@ -114,7 +136,7 @@ def detect_game_name(urls: list[str], input_source: str = "") -> str:
         if slug and slug != "fitgirl-repacks.site":
             return slug.replace("-", "_")
 
-    # 2. Check URL anchors for game name (#The_Witcher_3_Remastered_--_...)
+    # 2. Check URL anchors (#The_Witcher_3_Remastered_--_...)
     for u in urls:
         if '#' in u:
             anchor = u.split('#')[-1]
@@ -130,48 +152,42 @@ def detect_game_name(urls: list[str], input_source: str = "") -> str:
         if base and base.lower() not in ("urls", "links", "input"):
             return base
 
-    # 4. Fallback timestamped name
-    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"fitgirl_links_{now_str}"
+    return None
 
 
 async def extract_links_from_paste(page, paste_url: str) -> list[str]:
     """Open and decrypt a PrivateBin paste page (paste.fitgirl-repacks.site)"""
-    print(f"\n[1/3] Accessing encrypted paste: {paste_url}")
-    print("      Decrypting paste in headless browser...")
+    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Accessing encrypted paste: {C_CYAN}{paste_url}{C_RESET}")
+    print(f"         Decrypting paste in headless browser... ", end="", flush=True)
     await page.goto(paste_url, wait_until="networkidle", timeout=45000)
     await asyncio.sleep(2.5)
 
     body_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
     links = parse_links_from_text(body_text)
 
-    print(f"      Successfully extracted {len(links)} FuckingFast link(s) from paste.")
+    print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
+    print(f"         Extracted {C_BOLD}{len(links)}{C_RESET} FuckingFast link(s) from paste.")
     return links
 
 
 async def extract_links_from_fitgirl_page(page, repack_url: str) -> list[str]:
     """Scrape FuckingFast links from a FitGirl repack page"""
-    print(f"\n[1/3] Loading FitGirl repack page: {repack_url}")
+    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Loading FitGirl repack page: {C_CYAN}{repack_url}{C_RESET}")
     await page.goto(repack_url, wait_until="load", timeout=45000)
     await asyncio.sleep(2)
 
     content = await page.content()
     links = parse_links_from_text(content)
 
-    print(f"      Found {len(links)} FuckingFast link(s) on repack page.")
+    print(f"         Found {C_BOLD}{len(links)}{C_RESET} FuckingFast link(s) on repack page.")
     return links
 
 
 async def extract_direct_download(page, url: str, retries: int = 3) -> str | None:
-    """Extract direct download link handling Cloudflare Turnstile, HTMX & ad popunders.
-       If URL is ALREADY a direct link (e.g. dl.fuckingfast.co/dl/...), returns it immediately."""
+    """Extract direct download link handling Cloudflare Turnstile, HTMX & ad popunders."""
     clean_url = url.split('#')[0].strip()
     if not clean_url:
         return None
-
-    # Handle accidentally pasted direct download links!
-    if "/dl/" in clean_url and "dl.fuckingfast.co" in clean_url:
-        return clean_url
 
     for attempt in range(1, retries + 1):
         found_link = None
@@ -181,7 +197,6 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
             found_link = d.url
 
         def handle_popup(p):
-            # Auto-close ad popunders immediately
             asyncio.create_task(p.close())
 
         async def on_response(response):
@@ -229,7 +244,136 @@ async def extract_direct_download(page, url: str, retries: int = 3) -> str | Non
 
 
 async def run_pipeline(input_source: str, output_path: str | None = None, exclude_bonus: bool = False, keep_lang: str | None = "english"):
+    clean_input = input_source.strip().strip('"').strip("'")
     raw_urls = []
+
+    # Check if input is a local file
+    if os.path.isfile(clean_input):
+        print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Reading links from local file: {C_CYAN}{clean_input}{C_RESET}")
+        with open(clean_input, "r", encoding="utf-8") as f:
+            content = f.read()
+        paste_links, repack_links, ff_links = inspect_input(content)
+    else:
+        paste_links, repack_links, ff_links = inspect_input(clean_input)
+
+    # 1. Resolve any pastebin links or repack pages
+    if paste_links or repack_links:
+        async with async_playwright() as p:
+            launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
+            try:
+                browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
+            except Exception:
+                browser = await p.chromium.launch(headless=True, args=launch_args)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
+            await Stealth().apply_stealth_async(page)
+
+            for p_url in paste_links:
+                p_extracted = await extract_links_from_paste(page, p_url)
+                raw_urls.extend(p_extracted)
+
+            for r_url in repack_links:
+                r_extracted = await extract_links_from_fitgirl_page(page, r_url)
+                raw_urls.extend(r_extracted)
+
+            await browser.close()
+
+    # Also add any raw FuckingFast links that were pasted alongside
+    if ff_links:
+        if not paste_links and not repack_links:
+            print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Found {C_BOLD}{len(ff_links)}{C_RESET} FuckingFast link(s) directly from input (no pastebin needed).")
+        raw_urls.extend(ff_links)
+
+    # Deduplicate while preserving order
+    seen = set()
+    deduped_urls = []
+    for u in raw_urls:
+        if u not in seen:
+            seen.add(u)
+            deduped_urls.append(u)
+    raw_urls = deduped_urls
+
+    if not raw_urls:
+        print(f"\n{C_RED}[-] No valid FuckingFast links found to process.{C_RESET}")
+        return
+
+    # 2. Check if ALL links are ALREADY direct download links!
+    direct_links_only = [u for u in raw_urls if "/dl/" in u and "dl.fuckingfast.co" in u]
+    if len(direct_links_only) == len(raw_urls):
+        print("\n" + f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+        print(f"  {C_YELLOW}{C_BOLD}[+] NOTICE: All links provided are ALREADY direct download links!{C_RESET}")
+        print(f"      {C_DIM}Skipping browser automation, Cloudflare checks, and filters.{C_RESET}")
+        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+
+        game_name = detect_game_name(raw_urls, clean_input)
+        if not game_name:
+            prompt_name = input(f"{C_WHITE}{C_BOLD}>> Enter game name for file (e.g. witcher3) [default: direct_links]: {C_RESET}").strip()
+            game_name = prompt_name.replace(" ", "_") if prompt_name else "direct_links"
+
+        if not output_path:
+            output_path = os.path.join(DOWNLOAD_DIR, f"{game_name}_links.txt")
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            for link in raw_urls:
+                f.write(link.split('#')[0].strip() + "\n")
+
+        print(f"\n  {C_GREEN}{C_BOLD}SUCCESS: {len(raw_urls)} direct links saved instantly!{C_RESET}")
+        print(f"  Game: {C_GREEN}{C_BOLD}{game_name}{C_RESET}")
+        print(f"  Saved to file: {C_CYAN}{output_path}{C_RESET}")
+        copy_to_clipboard("\n".join([u.split('#')[0].strip() for u in raw_urls]))
+        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+
+        idm_exe = get_idm_exe()
+        if idm_exe:
+            print(f"\n{C_GREEN}[+] Internet Download Manager (IDM) detected!{C_RESET}")
+            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch IDM now? [Y/N, default=Y]: {C_RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
+                subprocess.Popen([idm_exe])
+                print(f"{C_GREEN}[+] IDM launched!{C_RESET}")
+        return
+
+    # 3. Detect game name
+    game_name = detect_game_name(raw_urls, clean_input)
+    if not game_name:
+        prompt_name = input(f"\n{C_WHITE}{C_BOLD}>> Enter game name for file (e.g. witcher3) [default: fitgirl_links]: {C_RESET}").strip()
+        game_name = prompt_name.replace(" ", "_") if prompt_name else f"fitgirl_links_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    if not output_path:
+        output_path = os.path.join(DOWNLOAD_DIR, f"{game_name}_links.txt")
+
+    # 4. Smart Filtering
+    filtered_urls = []
+    for url in raw_urls:
+        lower = url.lower()
+        if exclude_bonus and "fg-optional" in lower:
+            continue
+
+        if "fg-selective" in lower:
+            if keep_lang:
+                if keep_lang.lower() in lower:
+                    filtered_urls.append(url)
+                continue
+            else:
+                filtered_urls.append(url)
+                continue
+
+        filtered_urls.append(url)
+
+    if len(filtered_urls) < len(raw_urls):
+        diff = len(raw_urls) - len(filtered_urls)
+        lang_note = f" (kept '{keep_lang}' audio only)" if keep_lang else ""
+        print(f"         {C_YELLOW}Filter applied: excluded {diff} optional/foreign files{lang_note}.{C_RESET}")
+        print(f"         {C_BOLD}{len(filtered_urls)}{C_RESET} file(s) queued for download.")
+
+    # 5. Resolve links with Playwright
+    print(f"\n{C_MAGENTA}{C_BOLD}[Step 2]{C_RESET} Resolving {C_BOLD}{len(filtered_urls)}{C_RESET} direct download links for '{C_GREEN}{C_BOLD}{game_name}{C_RESET}'...")
+    print(f"         {C_DIM}(Shared stealth browser session bypassing Cloudflare & HTMX){C_RESET}")
+
+    results = []
+    total = len(filtered_urls)
 
     async with async_playwright() as p:
         launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
@@ -244,73 +388,12 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
         page = await context.new_page()
         await Stealth().apply_stealth_async(page)
 
-        clean_input = input_source.strip().strip('"').strip("'")
-
-        # Check if input is a PrivateBin paste
-        if "paste.fitgirl-repacks.site" in clean_input and "\n" not in clean_input:
-            raw_urls = await extract_links_from_paste(page, clean_input)
-        # Check if input is a FitGirl game repack page
-        elif "fitgirl-repacks.site" in clean_input and "\n" not in clean_input:
-            raw_urls = await extract_links_from_fitgirl_page(page, clean_input)
-        # Check if input is a file path
-        elif os.path.isfile(clean_input):
-            print(f"\n[1/3] Reading links from local file: {clean_input}")
-            with open(clean_input, "r", encoding="utf-8") as f:
-                raw_urls = parse_links_from_text(f.read())
-            print(f"      Read {len(raw_urls)} link(s) from file.")
-        # Check if input contains raw pasted link(s) or batch multi-line paste
-        else:
-            raw_urls = parse_links_from_text(clean_input)
-            if raw_urls:
-                print(f"\n[1/3] Parsed {len(raw_urls)} FuckingFast link(s) from pasted text.")
-
-        if not raw_urls:
-            print("\n[-] No valid FuckingFast links found to process.")
-            await browser.close()
-            return
-
-        # Smart Game-Specific Output Naming
-        game_name = detect_game_name(raw_urls, clean_input)
-        if not output_path:
-            output_path = os.path.join(DOWNLOAD_DIR, f"{game_name}_links.txt")
-
-        # Smart Filtering
-        filtered_urls = []
-        for url in raw_urls:
-            lower = url.lower()
-            if exclude_bonus and "fg-optional" in lower:
-                continue
-
-            if "fg-selective" in lower:
-                if keep_lang:
-                    # Keep only matching language voiceovers (default English)
-                    if keep_lang.lower() in lower:
-                        filtered_urls.append(url)
-                    continue
-                else:
-                    filtered_urls.append(url)
-                    continue
-
-            filtered_urls.append(url)
-
-        if len(filtered_urls) < len(raw_urls):
-            diff = len(raw_urls) - len(filtered_urls)
-            lang_note = f" (kept '{keep_lang}' only)" if keep_lang else ""
-            print(f"      Filter applied: excluded {diff} optional/foreign files{lang_note}.")
-            print(f"      {len(filtered_urls)} file(s) queued for download.")
-
-        # Step 2: Resolve direct download links
-        print(f"\n[2/3] Resolving {len(filtered_urls)} direct download links for '{game_name}'...")
-        print("      (Shared stealth browser session bypassing Cloudflare & HTMX)")
-
-        results = []
-        total = len(filtered_urls)
         for i, url in enumerate(filtered_urls, 1):
             name_hint = url.split('#')[-1] if '#' in url else f"Part {i}"
 
-            # Check if link was ALREADY a direct dl.fuckingfast.co/dl/... link
+            # Already direct link in a mixed batch
             if "/dl/" in url and "dl.fuckingfast.co" in url:
-                sys.stdout.write(f"  [{i}/{total}] {name_hint[:50]}... (Already direct link) OK!\n")
+                sys.stdout.write(f"  [{i}/{total}] {name_hint[:50]}... {C_YELLOW}(Already direct link) OK!{C_RESET}\n")
                 sys.stdout.flush()
                 results.append(url.split('#')[0].strip())
                 continue
@@ -321,75 +404,76 @@ async def run_pipeline(input_source: str, output_path: str | None = None, exclud
             direct = await extract_direct_download(page, url)
             if direct:
                 results.append(direct)
-                sys.stdout.write("OK!\n")
+                sys.stdout.write(f"{C_GREEN}{C_BOLD}OK!{C_RESET}\n")
             else:
-                sys.stdout.write("FAILED\n")
+                sys.stdout.write(f"{C_RED}{C_BOLD}FAILED{C_RESET}\n")
             sys.stdout.flush()
             await asyncio.sleep(0.8)
 
         await browser.close()
 
-    # Step 3: Finalize and IDM integration
-    print("\n[3/3] Finalizing results...")
+    # 6. Finalize output
+    print(f"\n{C_MAGENTA}{C_BOLD}[Step 3]{C_RESET} Finalizing results...")
     if results:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             for link in results:
                 f.write(link + "\n")
 
-        print(f"\n" + "=" * 65)
-        print(f"  SUCCESS: {len(results)}/{len(filtered_urls)} direct links resolved!")
-        print(f"  Game: {game_name}")
-        print(f"  Saved to file: {output_path}")
+        print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+        print(f"  {C_GREEN}{C_BOLD}SUCCESS: {len(results)}/{len(filtered_urls)} direct links resolved!{C_RESET}")
+        print(f"  Game: {C_GREEN}{C_BOLD}{game_name}{C_RESET}")
+        print(f"  Saved to file: {C_CYAN}{output_path}{C_RESET}")
         copy_to_clipboard("\n".join(results))
-        print("=" * 65)
+        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
 
-        # IDM integration prompt
         idm_exe = get_idm_exe()
         if idm_exe:
-            print("\n[+] Internet Download Manager (IDM) detected!")
-            ans = input(">> Would you like to launch IDM now? [Y/N, default=Y]: ").strip().lower()
-            if ans == "" or ans == "y":
+            print(f"\n{C_GREEN}[+] Internet Download Manager (IDM) detected!{C_RESET}")
+            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch IDM now? [Y/N, default=Y]: {C_RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
                 subprocess.Popen([idm_exe])
-                print("[+] IDM launched!")
-                print("[+] In IDM: Click 'Tasks' -> 'Add batch download from clipboard'")
-                print(f"           or 'Tasks' -> 'Import' -> 'From text file' ({os.path.basename(output_path)})")
+                print(f"{C_GREEN}[+] IDM launched!{C_RESET}")
+                print(f"    {C_DIM}In IDM: Click 'Tasks' -> 'Add batch download from clipboard'{C_RESET}")
+                print(f"    {C_DIM}        or 'Tasks' -> 'Import' -> 'From text file' ({os.path.basename(output_path)}){C_RESET}")
         else:
-            print("\nIn IDM: Click Tasks -> Import -> From text file and select:")
-            print(f"  {output_path}")
+            print(f"\nIn IDM: Click Tasks -> Import -> From text file and select:\n  {C_CYAN}{output_path}{C_RESET}")
 
-        # Highlight output file in Windows File Explorer
         try:
             subprocess.run(["explorer.exe", f"/select,{output_path}"], check=False)
         except Exception:
             pass
-
     else:
-        print("\n[-] No links could be resolved.")
-
-    print("\nPress Enter to exit...")
-    input()
+        print(f"\n{C_RED}[-] No links could be resolved.{C_RESET}")
 
 
 def interactive_menu():
     print(BANNER)
 
-    # 1. Check if Windows Clipboard already has links or FitGirl URL!
+    # Check clipboard first
     clip_text = get_clipboard_text()
-    clip_links = parse_links_from_text(clip_text)
+    p_links, r_links, f_links = inspect_input(clip_text)
     src = ""
 
-    if clip_links or "paste.fitgirl-repacks.site" in clip_text or "fitgirl-repacks.site" in clip_text:
-        count_desc = f"{len(clip_links)} FuckingFast link(s)" if clip_links else "FitGirl URL"
-        print(f"[+] Clipboard auto-detect: Found {count_desc} in your Windows Clipboard!")
-        ans = input(">> Press [ENTER] to use your clipboard, or type [P] to paste manually: ").strip().lower()
-        if ans == "" or ans == "y":
+    if p_links or r_links or f_links:
+        desc_parts = []
+        if p_links:
+            desc_parts.append(f"{len(p_links)} FitGirl Pastebin URL(s)")
+        if r_links:
+            desc_parts.append(f"{len(r_links)} FitGirl Repack Page(s)")
+        if f_links:
+            desc_parts.append(f"{len(f_links)} FuckingFast link(s)")
+
+        desc = " and ".join(desc_parts)
+        print(f"{C_GREEN}[+] Clipboard auto-detect: Found {C_BOLD}{desc}{C_RESET}{C_GREEN} in your Windows Clipboard!{C_RESET}")
+        ans = input(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to use your clipboard, or type [P] to paste manually: {C_RESET}").strip().lower()
+        if ans in ("", "y", "yes"):
             src = clip_text
 
-    # 2. Manual paste if not using clipboard
+    # Manual input if not using clipboard
     if not src:
-        print("\n>> Paste your URL, file path, or batch links below.")
-        print("   (Supports multi-line paste with or without bullets; press Enter when done):")
+        print(f"\n{C_WHITE}{C_BOLD}>> Paste your URL, file path, or batch links below:{C_RESET}")
+        print(f"   {C_DIM}(Supports multi-line paste with/without bullets; press Enter when done):{C_RESET}")
         lines = []
         while True:
             try:
@@ -399,7 +483,7 @@ def interactive_menu():
                         break
                     continue
                 lines.append(line)
-                # If a single URL was entered and no more lines follow in buffer:
+                # Quick exit if a single URL was entered
                 if len(lines) == 1 and ("paste.fitgirl-repacks.site" in line or "fitgirl-repacks.site" in line or os.path.isfile(line.strip().strip('"'))):
                     break
             except EOFError:
@@ -407,23 +491,33 @@ def interactive_menu():
         src = "\n".join(lines)
 
     if not src.strip():
-        print("[!] No input provided. Exiting.")
+        print(f"{C_RED}[!] No input provided.{C_RESET}")
         return
 
-    print("\n" + "=" * 65)
-    print("Step 2: Filters & Language Preferences")
-    print("=" * 65)
+    # Check if ALL links are already direct download links before asking filters
+    p_check, r_check, f_check = inspect_input(src)
+    if f_check and not p_check and not r_check:
+        direct_check = [u for u in f_check if "/dl/" in u and "dl.fuckingfast.co" in u]
+        if len(direct_check) == len(f_check):
+            # Instant passthrough! No filter questions!
+            asyncio.run(run_pipeline(src, None, False, None))
+            return
 
-    ans_bonus = input(">> Exclude optional bonus content (soundtracks/trailers)? [Y/N, default=N]: ").strip().lower()
+    # Filter preferences for unrendered links
+    print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+    print(f"{C_BOLD}Filters & Language Preferences{C_RESET}")
+    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+
+    ans_bonus = input(f"{C_WHITE}{C_BOLD}>> Exclude optional bonus content (soundtracks/trailers)? [Y/N, default=N]: {C_RESET}").strip().lower()
     exclude_bonus = (ans_bonus == "y")
 
-    print("\nLanguage options:")
-    print("  [Y] Keep ENGLISH ONLY (skip other language voiceovers) [Recommended]")
-    print("  [N] Download ALL languages")
-    print("  [Or type a language name: e.g. spanish, japanese, french]")
-    ans_lang = input(">> Your language choice [Y/N, default=Y]: ").strip().lower()
+    print(f"\n{C_BOLD}Language options:{C_RESET}")
+    print(f"  {C_GREEN}[Y]{C_RESET} Keep ENGLISH ONLY (skip other language voiceovers) {C_YELLOW}[Recommended]{C_RESET}")
+    print(f"  {C_WHITE}[N]{C_RESET} Download ALL languages")
+    print(f"  {C_DIM}[Or type a specific language: e.g. spanish, japanese, french]{C_RESET}")
+    ans_lang = input(f"{C_WHITE}{C_BOLD}>> Your language choice [Y/N, default=Y]: {C_RESET}").strip().lower()
 
-    if ans_lang == "" or ans_lang == "y":
+    if ans_lang in ("", "y", "yes"):
         keep_lang = "english"
     elif ans_lang == "n":
         keep_lang = None
@@ -442,7 +536,18 @@ def main():
     args = parser.parse_args()
 
     if not args.source:
-        interactive_menu()
+        # Interactive loop: restart afresh or exit!
+        while True:
+            interactive_menu()
+            print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+            print(f"{C_WHITE}{C_BOLD}>> What would you like to do next?{C_RESET}")
+            print(f"   {C_GREEN}[1]{C_RESET} Process another game / paste new links {C_YELLOW}(Start afresh){C_RESET}")
+            print(f"   {C_RED}[2]{C_RESET} Exit")
+            choice = input(f"{C_WHITE}{C_BOLD}>> Choice [1/2, default=2]: {C_RESET}").strip().lower()
+            if choice not in ("1", "again", "y", "yes", "afresh"):
+                print(f"\n{C_GREEN}All done! Happy downloading.{C_RESET}\n")
+                break
+            print("\n" * 2)
     else:
         keep_lang = None if args.lang.lower() in ("all", "none") else args.lang
         asyncio.run(run_pipeline(args.source, args.output, args.no_bonus, keep_lang))
