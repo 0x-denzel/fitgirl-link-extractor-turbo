@@ -2,44 +2,224 @@
 
 # FitGirl Turbo Link Extractor
 
-Quickly extract direct download links from **FitGirl Repacks**, ready to import into **IDM**, **JDownloader 2**, or **Free Download Manager**. Supports **FileKeeper**, **FuckingFast**, magnet links, and `.torrent` files on Windows and macOS.
+A high-performance Python tool that extracts direct download links from **FitGirl Repacks**, **PrivateBin pastes**, and supported file hosts, ready for **Internet Download Manager (IDM)**, **JDownloader 2**, and **Free Download Manager (FDM)**.
+
+**Latest release: v1.3.1** · By **0xDENZEL**
+
+## What's New
+
+- **FileKeeper and FuckingFast support:** Choose your preferred download mirror from a FitGirl repack page.
+- **Automatic first-run setup:** Missing dependencies download and install automatically. A browser runtime is also downloaded when needed.
+- **Windows and macOS launchers:** Launch directly without cloning the repository or creating a virtual environment.
+- **Batch processing:** Process a repack page, PrivateBin paste, individual links, or a text file containing multiple URLs.
+- **Improved progress saving:** Press **Ctrl+C** to stop and keep the links already completed.
+- **Expanded command-line options:** Choose a mirror, filter languages and bonus content, and set your output file.
+
+## Features
+
+- Extract direct links for single files and multi-part archives.
+- Process supported links silently in the background, without browser popups.
+- Choose English, another selective language, or all available languages.
+- Exclude optional bonus content when you don't need it.
+- Export a download-manager-ready text file and copy links to the clipboard.
+- Save `.torrent` files or open magnet links with your torrent client.
+- Follow progress on one terminal line, with handling for unavailable links and temporary failures.
+- Process multiple games in one interactive session.
 
 ## Supported Hosters & Mirrors
 
-| Mirror | Support |
+| Source | Support |
 | :--- | :--- |
 | **FileKeeper** | Direct download links — recommended |
 | **FuckingFast** | Direct download links |
-| **Magnet links** | Open with your torrent client |
-| **.torrent files** | Save to Downloads |
+| **FitGirl repack pages** | Select a supported host or torrent mirror |
+| **FitGirl PrivateBin pastes** | Read supported links or torrent attachments |
+| **Magnet links and `.torrent` files** | Torrent-client handoff or file export |
 
-DataNodes extraction is currently unsupported. Choose FileKeeper or FuckingFast instead.
+**DataNodes extraction is currently unsupported.** Choose FileKeeper or FuckingFast instead.
 
-## 1-Click Launch
+## Prerequisites
 
-**Python 3.10 or newer is required.** Dependencies install automatically on first use. No Git or virtual environment is needed.
+- **Python 3.10 or newer**, available in your terminal. On Windows, select **Add Python to PATH** during installation.
+- An internet connection for first-run setup and link processing.
+- A writable folder for the application files.
 
-- 🚀 **Windows:** Download [Download_FitGirl_Links.bat](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.bat) and double-click it.
-- 🍎 **macOS:** Download the BAT above and [Download_FitGirl_Links.command](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.command). Put both in the same folder and run the `.command` file. If needed, run `chmod +x Download_FitGirl_Links.command` first.
+**You do not need to install the Python dependencies manually.** On first use, the tool automatically installs any missing packages: Playwright, Playwright-Stealth, BeautifulSoup4, and Requests. It uses compatible installed Chrome when available, or downloads Chromium when needed. Setup may take a few minutes; later runs reuse the installed dependencies.
 
-## How It Works
+## Installation
 
-1. Copy a FitGirl repack page, PrivateBin paste, or list of supported links.
-2. Launch the tool and use your clipboard contents or paste your links.
-3. Choose your mirror, language, and optional-content preferences.
-4. Import the saved links from your Downloads folder into your download manager.
+### Option 1: Download and Launch — Recommended
 
-Links are also copied to your clipboard. Progress stays on one line, and **Ctrl+C** saves the links completed so far. Torrent links can be opened in your default torrent client.
+**Windows**
 
-## Command Line Usage
+1. Download [Download_FitGirl_Links.bat](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.bat).
+2. Save it in a writable folder and double-click it.
+3. Allow first-run setup to finish, then follow the prompts.
 
-```powershell
-python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/"
-python -x Download_FitGirl_Links.bat "links.txt" --lang english --no-bonus -o "game_links.txt"
+**macOS**
+
+1. Download the BAT above and [Download_FitGirl_Links.command](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.command).
+2. Keep both files in the same folder.
+3. Make the launcher executable if needed, then open it:
+
+```bash
+chmod +x Download_FitGirl_Links.command
+./Download_FitGirl_Links.command
 ```
 
-Use `python3` on macOS. Run with `--help` for more options.
+No Git checkout or virtual environment is required for these launchers. You can also find both files on the [latest release page](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest).
+
+### Option 2: Clone the Repository
+
+Use this option if you want the additional Python command-line tools, including `app.py` and `extract_ff_links.py`.
+
+```bash
+git clone https://github.com/EditByDenzel/fitgirl-link-extractor-turbo.git
+cd fitgirl-link-extractor-turbo
+python -x Download_FitGirl_Links.bat
+```
+
+Keep the project files together. Dependencies still install automatically when needed.
+
+## Usage
+
+### 1. Interactive Mode
+
+Double-click your launcher, or run:
+
+```bash
+python -x Download_FitGirl_Links.bat
+```
+
+Copy your links before launching, or paste them when prompted. You can also enter the path to a text file. For a multiline list, finish with an empty line. The interactive flow lets you choose your mirror, language, and bonus-content preferences.
+
+### 2. From a FitGirl Repack Page
+
+```bash
+python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/"
+```
+
+Choose a mirror directly to skip the mirror selector:
+
+```bash
+python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/" --mirror filekeeper
+python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/" --mirror fuckingfast
+```
+
+Use `--mirror auto` to select the preferred available host automatically.
+
+### 3. From a PrivateBin Paste
+
+```bash
+python -x Download_FitGirl_Links.bat "https://paste.fitgirl-repacks.site/?PASTE_ID#DECRYPTION_KEY"
+```
+
+Replace the example with your complete paste URL, including the part after `#`.
+
+### 4. From a Text File of URLs
+
+Put one supported URL on each line in `my_links.txt`, then run:
+
+```bash
+python -x Download_FitGirl_Links.bat "my_links.txt"
+```
+
+To choose an output file, keep English selective files, and skip bonus content:
+
+```bash
+python -x Download_FitGirl_Links.bat "my_links.txt" --lang english --no-bonus -o "game_links.txt"
+```
+
+To retain all languages:
+
+```bash
+python -x Download_FitGirl_Links.bat "my_links.txt" --lang all
+```
+
+### Main Launcher Options
+
+| Option | Description |
+| :--- | :--- |
+| `source` | A repack/paste URL, supported host link, magnet, `.torrent` URL, or text-file path. Omit it for interactive mode. |
+| `--mirror auto` | Automatically choose the preferred available repack host. |
+| `--mirror filekeeper` | Select FileKeeper for a repack page. |
+| `--mirror fuckingfast` | Select FuckingFast for a repack page. |
+| `--lang english` | Keep English selective files; this is the command-line default. |
+| `--lang all` | Keep every selective language. Another language name, such as `french`, keeps that language instead. |
+| `--no-bonus` | Exclude optional bonus files. Without this flag, bonus files are retained. |
+| `-o`, `--output` | Set the output file path. |
+| `--help` | Show available options. |
+| `--version` | Show the application version. |
+
+Use `python3` instead of `python` on macOS/Linux. The main launcher takes a text-file path directly; the `--file` flag belongs to `app.py` below.
+
+## Additional Python Command-Line Tools
+
+These tools are included in the full repository and remain available for existing workflows.
+
+### `app.py`
+
+Process a repack page using FuckingFast:
+
+```bash
+python app.py --url "https://fitgirl-repacks.site/game-name/"
+```
+
+Exclude bonus files and all selective language packs:
+
+```bash
+python app.py --url "https://fitgirl-repacks.site/game-name/" --noBonus --noLanguage
+```
+
+Process a text file or set a custom output path:
+
+```bash
+python app.py --file "my_links.txt"
+python app.py --file "my_links.txt" -o "game_links.txt"
+```
+
+| Option | Description |
+| :--- | :--- |
+| `--url` | FitGirl repack page; this mode selects FuckingFast. |
+| `--file` | Text file containing supported links. Use either `--url` or `--file`. |
+| `--noBonus` | Exclude optional bonus files. |
+| `--noLanguage` | Exclude **all** selective language packs. Without this flag, this tool retains all languages. |
+| `-o`, `--output` | Choose an output file. |
+
+Use the main launcher when you want mirror selection or to retain one particular language.
+
+### `extract_ff_links.py`
+
+An alternative entry point for batch URL files:
+
+```bash
+python extract_ff_links.py "my_links.txt"
+python extract_ff_links.py "my_links.txt" --no-bonus --lang english -o "game_links.txt"
+```
+
+This entry point retains all languages by default. Run either Python tool with `--help` for its options.
+
+## Where Are My Links Saved?
+
+| Entry point | Default output |
+| :--- | :--- |
+| Windows/macOS launcher or `python -x Download_FitGirl_Links.bat` | `<Game_Name>_links.txt` in your Downloads folder |
+| `app.py` | `output/<name>_links.txt` under the folder you run it from |
+| `extract_ff_links.py` | `idm_links.txt` in your Downloads folder |
+
+Use `-o` to change the destination. Exported files contain one direct URL per line. Completed links are also copied to your clipboard when available, and the saved file is revealed in Explorer/Finder.
+
+Press **Ctrl+C** during processing to save the links completed so far. If a host link expires later, process the source again to obtain a fresh one.
+
+## How to Import into IDM
+
+1. Open **Internet Download Manager**.
+2. Go to **Tasks → Import → From text file**.
+3. Select the generated links file from Downloads, `output/`, or your custom destination.
+4. Select the files you want and start the queue.
+
+For **JDownloader 2** or **FDM**, paste the copied links into the manager's add-links window. Magnet links and `.torrent` files use your preferred torrent client.
 
 ## License
 
-[MIT License](LICENSE) · By **0xDENZEL**
+This project is licensed under the [MIT License](LICENSE) · By **0xDENZEL**.
