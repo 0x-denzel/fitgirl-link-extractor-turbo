@@ -71,7 +71,7 @@ No Git checkout or virtual environment is required for these launchers. You can 
 
 ### Option 2: Clone the Repository
 
-Use this option if you want the additional Python command-line tools, including `app.py` and `extract_ff_links.py`.
+Use this option if you want the additional `app.py` command-line interface.
 
 ```bash
 git clone https://github.com/EditByDenzel/fitgirl-link-extractor-turbo.git
@@ -153,11 +153,9 @@ python -x Download_FitGirl_Links.bat "my_links.txt" --lang all
 
 Use `python3` instead of `python` on macOS/Linux. The main launcher takes a text-file path directly; the `--file` flag belongs to `app.py` below.
 
-## Additional Python Command-Line Tools
+## Python Command-Line Interface (`app.py`)
 
-These tools are included in the full repository and remain available for existing workflows.
-
-### `app.py`
+This entry point is included in the full repository for existing workflows.
 
 Process a repack page using FuckingFast:
 
@@ -188,16 +186,7 @@ python app.py --file "my_links.txt" -o "game_links.txt"
 
 Use the main launcher when you want mirror selection or to retain one particular language.
 
-### `extract_ff_links.py`
-
-An alternative entry point for batch URL files:
-
-```bash
-python extract_ff_links.py "my_links.txt"
-python extract_ff_links.py "my_links.txt" --no-bonus --lang english -o "game_links.txt"
-```
-
-This entry point retains all languages by default. Run either Python tool with `--help` for its options.
+Run `python app.py --help` for its available options.
 
 ## Where Are My Links Saved?
 
@@ -205,7 +194,6 @@ This entry point retains all languages by default. Run either Python tool with `
 | :--- | :--- |
 | Windows/macOS launcher or `python -x Download_FitGirl_Links.bat` | `<Game_Name>_links.txt` in your Downloads folder |
 | `app.py` | `output/<name>_links.txt` under the folder you run it from |
-| `extract_ff_links.py` | `idm_links.txt` in your Downloads folder |
 
 Use `-o` to change the destination. Exported files contain one direct URL per line. Completed links are also copied to your clipboard when available, and the saved file is revealed in Explorer/Finder.
 
