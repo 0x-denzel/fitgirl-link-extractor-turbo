@@ -29,6 +29,68 @@ import uuid
 from dataclasses import dataclass, field
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
 
+def enable_terminal():
+    if sys.platform == 'win32':
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(Exception): stream.reconfigure(encoding='utf-8', errors='replace')
+        try:
+            from ctypes import wintypes
+            kernel = ctypes.windll.kernel32
+            kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+            kernel.GetStdHandle.restype = wintypes.HANDLE
+            kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            handle = kernel.GetStdHandle(-11)
+            mode = wintypes.DWORD()
+            if kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+                kernel.SetConsoleMode(handle, mode.value | 4)
+        except Exception:
+            pass
+
+enable_terminal()
+
+C_CYAN = "\033[96m"
+C_GREEN = "\033[92m"
+C_YELLOW = "\033[93m"
+C_RED = "\033[91m"
+C_MAGENTA = "\033[95m"
+C_WHITE = "\033[97m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_RESET = "\033[0m"
+
+def strip_ansi(text: str) -> str:
+    return re.sub(r'\033\[[0-9;]*m', '', text)
+
+def make_link(text: str, url: str) -> str:
+    """Render clickable OSC 8 hyperlink everywhere; modern conhost, Windows Terminal & macOS parse cleanly without wrapping"""
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
+
+LINK_SITE = make_link("Website", "https://chideraokonkwo.com")
+LINK_COFFEE = make_link("Buy Me a Coffee", "https://chideraokonkwo.gumroad.com/coffee")
+
+BANNER = f"""
+{C_CYAN}{C_BOLD} =============================================================================
+    ______ _ _    _____ _      _   _______             _
+   |  ____(_) |  / ____(_)    | | |__   __|           | |
+   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___
+   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \\ / _ \\
+   | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
+   |_|    |_|\\__|\\_____|_|_|  |_|    |_| \\__,_|_|     |_.__/ \\___/
+
+             {C_YELLOW}>>> BY 0xDENZEL | {LINK_SITE} | {LINK_COFFEE} <<<{C_CYAN}{C_BOLD}
+ ============================================================================={C_RESET}
+  {C_WHITE}Automated direct link resolver for IDM, JDownloader & Free Download Manager{C_RESET}
+  {C_DIM}Supported Hosters & Mirrors:
+   [+] FuckingFast (fuckingfast.co) - Instant CDN Direct Links
+   [+] FileKeeper (filekeeper.net) - High-Speed Turbo Tunnel Mirrors
+   [+] Torrent & Magnet Mirrors (Magnet URI, .torrent file download)
+   [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
+   [+] FitGirl Repack game pages with interactive mirror selector
+   [+] Instant passthrough for already direct links (.dlproxy.uk, /dl/, /d/){C_RESET}
+{C_CYAN}{C_BOLD} ============================================================================={C_RESET}
+"""
+
 VERSION = '1.3.1'
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = str(Path.home() / 'Downloads')
@@ -256,7 +318,7 @@ def plain_text(value):
 
 def safe_filename(value, default='fitgirl', limit=140):
     value = unicodedata.normalize('NFC', plain_text(value))
-    value = re.sub(r'[<>:"/\\|?*]', '_', value)
+    value = re.sub(r'[<>:"/\\|?*,\u2013\u2014]', '_', value)
     value = re.sub(r'\s+', '_', value).strip(' ._')[:limit].rstrip(' .')
     if not value or value in ('.', '..'):
         value = default
@@ -365,9 +427,11 @@ def parse_repack_html(content, repack_url):
         label = anchor.get_text(' ', strip=True).casefold()
         context_label = anchor.parent.get_text(' ', strip=True)[:400].casefold() if anchor.parent else label
         if is_magnet(url):
-            torrents.append({'name': 'Magnet Link', 'type': 'magnet', 'url': url, 'tag': 'Open in your torrent client'})
+            if not any(t.get('type') == 'magnet' for t in torrents):
+                torrents.append({'name': 'Magnet Link', 'type': 'magnet', 'url': url, 'tag': 'Open in your torrent client'})
         elif is_torrent_url(url) or (is_paste(url) and 'torrent' in label):
-            torrents.append({'name': '.torrent File Download', 'type': 'torrent_file', 'url': url, 'tag': 'Save a verified torrent attachment'})
+            if not any(t.get('type') == 'torrent_file' for t in torrents):
+                torrents.append({'name': '.torrent File Download', 'type': 'torrent_file', 'url': url, 'tag': 'Save a verified torrent attachment'})
         elif detect_hoster(url) or is_paste(url):
             host = detect_hoster(url)
             if not host:
@@ -400,6 +464,18 @@ def fit_text(text, width):
     return ''.join(result)
 
 
+def colorize_progress_row(row):
+    row = re.sub(r'(█+)', f'{C_GREEN}\\1{C_RESET}', row)
+    row = row.replace('> resolving', f'{C_CYAN}➜ Resolving...{C_RESET}')
+    row = row.replace('+ OK', f'{C_GREEN}{C_BOLD}➜ OK!{C_RESET}')
+    row = row.replace('x failed', f'{C_RED}{C_BOLD}➜ FAILED{C_RESET}')
+    row = row.replace('x removed', f'{C_RED}{C_BOLD}➜ [REMOVED/404]{C_RESET}')
+    row = row.replace('! verify', f'{C_YELLOW}{C_BOLD}➜ [VERIFY]{C_RESET}')
+    row = row.replace('! limited', f'{C_YELLOW}{C_BOLD}➜ [LIMITED]{C_RESET}')
+    row = row.replace('! use alternate', f'{C_YELLOW}{C_BOLD}➜ [ALTERNATE]{C_RESET}')
+    return row
+
+
 class Progress:
     """One physical row; no per-file output when stdout is redirected."""
     def __init__(self, total, stream=None):
@@ -409,23 +485,24 @@ class Progress:
         self.active = False
 
     def render(self, completed, title, status, width=None):
-        width = max(1, (width or shutil.get_terminal_size((80, 24)).columns) - 1)
+        budget = max(1, (width or shutil.get_terminal_size((80, 24)).columns) - 1)
         pct = int(100 * completed / self.total) if self.total else 100
         prefix = f'{completed}/{self.total} {pct:3d}% '
-        suffix = ' ' + status
-        available = width - len(prefix) - len(suffix)
+        suffix = ' ' + plain_text(status)
+        available = budget - display_width(prefix) - display_width(suffix)
         bar_size = max(0, min(14, available // 3))
         bar = ''
         if bar_size >= 3:
             filled = int(bar_size * completed / self.total) if self.total else bar_size
-            bar = '[' + '#' * filled + '-' * (bar_size-filled) + '] '
-        label = fit_text(title, width - len(prefix) - len(bar) - len(suffix))
-        return fit_text(prefix + bar + label + suffix, width)
+            bar = '|' + '█' * filled + '░' * (bar_size - filled) + '| '
+        label = fit_text(title, budget - display_width(prefix) - display_width(bar) - display_width(suffix))
+        return fit_text(prefix + bar + label + suffix, budget)
 
     def update(self, completed, title, status):
         if self.enabled:
             row = self.render(completed, title, status)
-            self.stream.write('\r' + row + '\033[K')
+            colored = colorize_progress_row(row)
+            self.stream.write('\r' + colored + '\033[K')
             self.stream.flush()
             self.active = True
 
@@ -591,10 +668,13 @@ class BrowserSession:
             context = await self.browser.new_context(accept_downloads=False, service_workers='block', **options)
             self.contexts[host] = context
             async def route_assets(route):
-                if self.block_assets and route.request.resource_type in ('image', 'media', 'font'):
-                    await route.abort()
-                else:
-                    await route.continue_()
+                try:
+                    if self.block_assets and route.request.resource_type in ('image', 'media', 'font'):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                except Exception:
+                    pass
             await context.route('**/*', route_assets)
             def page_created(page):
                 # new_page() fires the event before returning the intended page.
@@ -758,11 +838,14 @@ async def resolve_on_page(page, url, host=None, deadline=30, on_success=None):
         for value in (response.headers.get('hx-redirect'), response.headers.get('location')):
             if value: capture(value, response.url)
     async def capture_route(route):
-        if is_direct_link(route.request.url):
-            capture(route.request.url)
-            await route.abort()
-        else:
-            await route.fallback()
+        try:
+            if is_direct_link(route.request.url):
+                capture(route.request.url)
+                await route.abort()
+            else:
+                await route.fallback()
+        except Exception:
+            pass
     page.on('download', on_download)
     page.on('response', on_response)
 
@@ -976,14 +1059,19 @@ def copy_to_clipboard(text):
 
 
 def reveal_file(path):
-    path = str(Path(path).resolve())
+    target = Path(path).resolve()
     try:
         if sys.platform == 'win32':
-            quiet_process(['explorer.exe', '/select,' + path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if target.is_file():
+                quiet_process(['explorer.exe', f'/select,{str(target)}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif target.is_dir():
+                quiet_process(['explorer.exe', str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                quiet_process(['explorer.exe', str(target.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif sys.platform == 'darwin':
-            quiet_process(['open', '-R', path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            quiet_process(['open', '-R', str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         elif shutil.which('xdg-open'):
-            quiet_process(['xdg-open', str(Path(path).parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            quiet_process(['xdg-open', str(target.parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             return False
         return True
@@ -1130,12 +1218,16 @@ def choose_mirror(data, mirror=None, interactive=False):
         options = [('host', h) for h in SUPPORTED_HOSTS if h in groups]
         options += [('torrent', t) for t in data['torrent_mirrors']]
         if options:
-            print('\n' + plain_text(data['game_title']))
+            print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+            print(f"  {C_WHITE}Repack Detected:{C_RESET} {C_GREEN}{C_BOLD}{plain_text(data['game_title'])}{C_RESET}")
+            print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
             for index, (kind, value) in enumerate(options, 1):
                 label = HOST_NAMES[value] if kind == 'host' else value['name']
-                note = ' (recommended)' if value == 'filekeeper' else ''
-                print(f'  [{index}] {label}{note}')
-            answer = ask(f'Select mirror [1-{len(options)}, default=1]: ', '1')
+                note = f" {C_YELLOW}[Recommended]{C_RESET}" if value == 'filekeeper' else ''
+                desc = f" ➜ {value['tag']}" if kind == 'torrent' else (" ➜ Turbo tunnel mirror (~1.5s/link)" if value == 'filekeeper' else " ➜ Direct CDN (~2.5s/link)")
+                print(f"  {C_GREEN}[{index}]{C_RESET} {C_BOLD}{label:<24}{C_RESET}{desc}{note}")
+            print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+            answer = ask(f"{C_WHITE}{C_BOLD}>> Select mirror [1-{len(options)}, default=1]: {C_RESET}", '1')
             if not answer.isdigit() or not 1 <= int(answer) <= len(options):
                 raise ExtractionError('Invalid mirror selection.')
             kind, value = options[int(answer)-1]
@@ -1193,7 +1285,7 @@ async def process_batch(urls, alternatives, session, sink, progress):
     blocked = {}
     for index, url in enumerate(urls):
         title = filename_hint(url) or f'Part {index+1}'
-        progress.update(index, title, '> resolving')
+        progress.update(index, title, f"{C_CYAN}➜ Resolving...{C_RESET}")
         host = detect_hoster(url)
         if host == 'datanodes' and not is_direct_link(url):
             result = Resolution('alternative_required')
@@ -1205,7 +1297,7 @@ async def process_batch(urls, alternatives, session, sink, progress):
             for alternative in alternatives.get(url_identity(url), []):
                 alt_host = detect_hoster(alternative)
                 if alt_host in blocked: continue
-                progress.update(index, title, '> ' + HOST_NAMES.get(alt_host, 'fallback'))
+                progress.update(index, title, f"{C_YELLOW}➜ {HOST_NAMES.get(alt_host, 'fallback')}...{C_RESET}")
                 result = await resolve_url(session, alternative, on_success=sink.add)
                 if result.status == 'verification_required': blocked[alt_host] = result.status
                 if result.status == 'success': break
@@ -1213,8 +1305,13 @@ async def process_batch(urls, alternatives, session, sink, progress):
             sink.add(result.url)
             summary.resolved = len(sink.links)
         summary.statuses[result.status] = summary.statuses.get(result.status, 0) + 1
-        label = {'success': '+ OK', 'removed': 'x removed', 'verification_required': '! verify',
-                 'rate_limited': '! limited', 'alternative_required': '! use alternate'}.get(result.status, 'x failed')
+        label = {
+            'success': f"{C_GREEN}{C_BOLD}➜ OK!{C_RESET}",
+            'removed': f"{C_RED}{C_BOLD}➜ [REMOVED/404]{C_RESET}",
+            'verification_required': f"{C_YELLOW}{C_BOLD}➜ [VERIFY]{C_RESET}",
+            'rate_limited': f"{C_YELLOW}{C_BOLD}➜ [LIMITED]{C_RESET}",
+            'alternative_required': f"{C_YELLOW}{C_BOLD}➜ [ALTERNATE]{C_RESET}"
+        }.get(result.status, f"{C_RED}{C_BOLD}➜ FAILED{C_RESET}")
         progress.update(index+1, title, label)
     return summary
 
@@ -1293,13 +1390,24 @@ async def run_pipeline(input_source, output_path=None, exclude_bonus=False, keep
                 if handoff:
                     with contextlib.suppress(Exception): copied = copy_to_clipboard('\n'.join(sink.links))
                     with contextlib.suppress(Exception): reveal_file(sink.path)
-                label = 'Partial results saved' if summary.interrupted or summary.error else 'Links saved'
-                print(f'{label}: {summary.resolved}/{summary.total}\n{sink.path}')
-                if handoff: print('Copied to clipboard.' if copied else 'Clipboard unavailable; use the saved file.')
+                if summary.interrupted or summary.error:
+                    print(f"\n{C_YELLOW}{C_BOLD}================================================================={C_RESET}")
+                    print(f"  {C_YELLOW}{C_BOLD}PARTIAL RESULTS PRESERVED: {summary.resolved}/{summary.total} links saved{C_RESET}")
+                    print(f"  Saved to file: {C_CYAN}{sink.path}{C_RESET}")
+                    if handoff:
+                        print(f"  Clipboard:     {C_GREEN}Copied to clipboard!{C_RESET}" if copied else f"  {C_YELLOW}Clipboard unavailable; use the saved file.{C_RESET}")
+                    print(f"{C_YELLOW}{C_BOLD}================================================================={C_RESET}\n")
+                else:
+                    print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
+                    print(f"  {C_GREEN}{C_BOLD}SUCCESS: {summary.resolved}/{summary.total} direct links saved!{C_RESET}")
+                    print(f"  Saved to file: {C_CYAN}{sink.path}{C_RESET}")
+                    if handoff:
+                        print(f"  Clipboard:     {C_GREEN}Copied to clipboard!{C_RESET}" if copied else f"  {C_YELLOW}Clipboard unavailable; use the saved file.{C_RESET}")
+                    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}\n")
             elif summary.total:
-                print('No links were resolved; any existing output file was left unchanged.')
-        if summary.interrupted: print('Cancelled. Completed links have been preserved.')
-        if summary.error: print('Error: ' + plain_text(summary.error))
+                print(f"{C_RED}[-] No links were resolved; any existing output file was left unchanged.{C_RESET}")
+        if summary.interrupted: print(f"{C_YELLOW}[!] Cancelled. Completed links have been preserved.{C_RESET}")
+        if summary.error: print(f"{C_RED}[!] Error: {plain_text(summary.error)}{C_RESET}")
     if summary.statuses.get('verification_required'):
         print('Some files require host verification. No matching working fallback was available.')
     if summary.statuses.get('alternative_required'):
@@ -1331,25 +1439,6 @@ async def handle_repack_mirror_selection(repack_url, output_path=None, exclude_b
                               interactive=kwargs.pop('interactive', True), **kwargs)
 
 
-def enable_terminal():
-    if sys.platform == 'win32':
-        for stream in (sys.stdout, sys.stderr):
-            with contextlib.suppress(Exception): stream.reconfigure(encoding='utf-8', errors='replace')
-        try:
-            from ctypes import wintypes
-            kernel = ctypes.windll.kernel32
-            kernel.GetStdHandle.argtypes = [wintypes.DWORD]
-            kernel.GetStdHandle.restype = wintypes.HANDLE
-            kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-            kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-            handle = kernel.GetStdHandle(-11)
-            mode = wintypes.DWORD()
-            if kernel.GetConsoleMode(handle, ctypes.byref(mode)):
-                kernel.SetConsoleMode(handle, mode.value | 4)
-        except Exception:
-            pass
-
-
 def interactive_menu():
     print(BANNER)
     clipboard = get_clipboard_text()
@@ -1359,10 +1448,12 @@ def interactive_menu():
     except ExtractionError:
         found = False
     if found:
-        if ask('Supported links found in clipboard. Enter to use, or P to paste manually: ').lower() != 'p':
+        print(f"{C_GREEN}[+] Clipboard auto-detect: Supported links found in your Clipboard!{C_RESET}")
+        ans = ask(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to use clipboard, or type [P] to paste manually: {C_RESET}", 'enter')
+        if ans.lower() not in ('p', 'paste'):
             source = clipboard
     if not source:
-        print('Paste a URL, file path, or link list. End a list with an empty line:')
+        print(f"\n{C_WHITE}{C_BOLD}>> Paste a URL, file path, or link list (end a list with an empty line):{C_RESET}")
         lines = []
         while True:
             try:
@@ -1377,11 +1468,17 @@ def interactive_menu():
                 break
         source = '\n'.join(lines)
     if not source:
-        print('No input provided.')
+        print(f"{C_YELLOW}[!] No input provided.{C_RESET}")
         return
-    exclude = ask('Exclude optional bonus files? [y/N]: ', 'n').lower() in ('y', 'yes')
-    lang = ask('Language: Enter for English, N for all, or type a language: ', 'english').lower()
+    print(f"\n{C_CYAN}{C_BOLD}-----------------------------------------------------------------{C_RESET}")
+    exclude = ask(f"{C_WHITE}{C_BOLD}>> Exclude optional bonus files (soundtracks/trailers)? [y/N, default=N]: {C_RESET}", 'n').lower() in ('y', 'yes')
+    print(f"{C_WHITE}{C_BOLD}>> Selective Voiceover Language:{C_RESET}")
+    print(f"   {C_GREEN}[Enter]{C_RESET} Keep English only {C_YELLOW}[Recommended]{C_RESET}")
+    print(f"   {C_WHITE}[N]{C_RESET}     Download all languages")
+    print(f"   {C_DIM}[Or type a language: e.g. spanish, japanese, french]{C_RESET}")
+    lang = ask(f"{C_WHITE}{C_BOLD}>> Your language choice [default=English]: {C_RESET}", 'english').lower()
     lang = None if lang in ('n', 'all', 'none') else ('english' if lang in ('y', 'yes') else lang)
+    print(f"{C_CYAN}{C_BOLD}-----------------------------------------------------------------{C_RESET}\n")
     asyncio.run(run_pipeline(source, None, exclude, lang, interactive=True))
 
 
@@ -1420,56 +1517,6 @@ def main(argv=None):
         return 130
 
 
-# Retain the original branding and download-manager discovery.
-
-
-C_CYAN = "\033[96m"
-
-C_GREEN = "\033[92m"
-
-C_YELLOW = "\033[93m"
-
-C_RED = "\033[91m"
-
-C_MAGENTA = "\033[95m"
-
-C_WHITE = "\033[97m"
-
-C_BOLD = "\033[1m"
-
-C_DIM = "\033[2m"
-
-C_RESET = "\033[0m"
-
-def make_link(text: str, url: str) -> str:
-    """Render clickable OSC 8 hyperlink everywhere; modern conhost, Windows Terminal & macOS parse cleanly without wrapping"""
-    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
-
-LINK_SITE = make_link("Website", "https://chideraokonkwo.com")
-
-LINK_COFFEE = make_link("Buy Me a Coffee", "https://chideraokonkwo.gumroad.com/coffee")
-
-BANNER = f"""
-{C_CYAN}{C_BOLD} =============================================================================
-    ______ _ _    _____ _      _   _______             _
-   |  ____(_) |  / ____(_)    | | |__   __|           | |
-   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___
-   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \\ / _ \\
-   | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
-   |_|    |_|\\__|\\_____|_|_|  |_|    |_| \\__,_|_|     |_.__/ \\___/
-
-             {C_YELLOW}>>> BY 0xDENZEL | {LINK_SITE} | {LINK_COFFEE} <<<{C_CYAN}{C_BOLD}
- ============================================================================={C_RESET}
-  {C_WHITE}Automated direct link resolver for IDM, JDownloader & Free Download Manager{C_RESET}
-  {C_DIM}Supported Hosters & Mirrors:
-   [+] FuckingFast (fuckingfast.co) - Instant CDN Direct Links
-   [+] FileKeeper (filekeeper.net) - High-Speed Turbo Tunnel Mirrors
-   [+] Torrent & Magnet Mirrors (Magnet URI, .torrent file download)
-   [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
-   [+] FitGirl Repack game pages with interactive mirror selector
-   [+] Instant passthrough for already direct links (.dlproxy.uk, /dl/, /d/){C_RESET}
-{C_CYAN}{C_BOLD} ============================================================================={C_RESET}
-"""
 
 def get_installed_download_managers() -> list[tuple[str, str, str]]:
     """Detect installed download managers across Windows and macOS.
