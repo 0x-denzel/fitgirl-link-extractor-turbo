@@ -4,7 +4,7 @@
 
 A high-performance Python tool that extracts direct download links from **FitGirl Repacks**, **PrivateBin pastes**, and supported file hosts, ready for **Internet Download Manager (IDM)**, **JDownloader 2**, and **Free Download Manager (FDM)**.
 
-**Latest release: v1.3.2** · By [**Chidera Okonkwo (0xdenzel)**](https://chideraokonkwo.com)
+**Latest release: v1.3.2** 
 
 ## What's New
 
