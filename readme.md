@@ -208,6 +208,8 @@ Press **Ctrl+C** during processing to save the links completed so far. If a host
 
 For **JDownloader 2** or **FDM**, paste the copied links into the manager's add-links window. Magnet links and `.torrent` files use your preferred torrent client.
 
-## License
+## License & Acknowledgements
 
-This project is licensed under the [MIT License](LICENSE) · By **0xDENZEL**.
+This project is licensed under the [MIT License](LICENSE) · Maintained and overhauled by **0xDENZEL** ([@EditByDenzel](https://github.com/EditByDenzel)).
+
+Special thanks and attribution to **Novandi Ramadhan** for the original base project and inspiration.
