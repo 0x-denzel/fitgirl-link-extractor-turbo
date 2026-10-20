@@ -1,10 +1,10 @@
-![FitGirl Turbo Link Extractor — by 0xDENZEL](assets/banner.png)
+![FitGirl Turbo Link Extractor — by Chidera Okonkwo (0xdenzel)](assets/banner.png)
 
 # FitGirl Turbo Link Extractor
 
 A high-performance Python tool that extracts direct download links from **FitGirl Repacks**, **PrivateBin pastes**, and supported file hosts, ready for **Internet Download Manager (IDM)**, **JDownloader 2**, and **Free Download Manager (FDM)**.
 
-**Latest release: v1.3.1** · By **0xDENZEL**
+**Latest release: v1.3.2** · By [**Chidera Okonkwo (0xdenzel)**](https://chideraokonkwo.com)
 
 ## What's New
 
@@ -52,13 +52,13 @@ A high-performance Python tool that extracts direct download links from **FitGir
 
 **Windows**
 
-1. Download [Download_FitGirl_Links.bat](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.bat).
+1. Download [Download_FitGirl_Links.bat](https://github.com/0x-denzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.bat).
 2. Save it in a writable folder and double-click it.
 3. Allow first-run setup to finish, then follow the prompts.
 
 **macOS**
 
-1. Download the BAT above and [Download_FitGirl_Links.command](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.command).
+1. Download the BAT above and [Download_FitGirl_Links.command](https://github.com/0x-denzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.command).
 2. Keep both files in the same folder.
 3. Make the launcher executable if needed, then open it:
 
@@ -67,14 +67,14 @@ chmod +x Download_FitGirl_Links.command
 ./Download_FitGirl_Links.command
 ```
 
-No Git checkout or virtual environment is required for these launchers. You can also find both files on the [latest release page](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest).
+No Git checkout or virtual environment is required for these launchers. You can also find both files on the [latest release page](https://github.com/0x-denzel/fitgirl-link-extractor-turbo/releases/latest).
 
 ### Option 2: Clone the Repository
 
 Use this option if you want the additional `app.py` command-line interface.
 
 ```bash
-git clone https://github.com/EditByDenzel/fitgirl-link-extractor-turbo.git
+git clone https://github.com/0x-denzel/fitgirl-link-extractor-turbo.git
 cd fitgirl-link-extractor-turbo
 python -x Download_FitGirl_Links.bat
 ```
@@ -210,6 +210,6 @@ For **JDownloader 2** or **FDM**, paste the copied links into the manager's add-
 
 ## License & Acknowledgements
 
-This project is licensed under the [MIT License](LICENSE) · Maintained and overhauled by **0xDENZEL** ([@EditByDenzel](https://github.com/EditByDenzel)).
+This project is licensed under the [MIT License](LICENSE) · Maintained and overhauled by [**Chidera Okonkwo (0xdenzel)**](https://chideraokonkwo.com) ([@0x-denzel](https://github.com/0x-denzel)).
 
 Special thanks and attribution to **Novandi Ramadhan** for the original base project and inspiration.
