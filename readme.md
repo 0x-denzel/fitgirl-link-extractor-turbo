@@ -1,19 +1,8 @@
+![FitGirl Turbo Link Extractor — by 0xDENZEL](assets/banner.png)
+
 # FitGirl Turbo Link Extractor
 
 Quickly extract direct download links from **FitGirl Repacks**, ready to import into **IDM**, **JDownloader 2**, or **Free Download Manager**. Supports **FileKeeper**, **FuckingFast**, magnet links, and `.torrent` files on Windows and macOS.
-
-```text
- =============================================================================
-    ______ _ _    _____ _      _   _______             _
-   |  ____(_) |  / ____(_)    | | |__   __|           | |
-   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___
-   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \ / _ \
-   | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
-   |_|    |_|\__|\_____|_|_|  |_|    |_| \__,_|_|     |_.__/ \___/
-
-             >>> BY 0xDENZEL | Website | Buy Me a Coffee <<<
- =============================================================================
-```
 
 ## Supported Hosters & Mirrors
 
@@ -50,7 +39,6 @@ python -x Download_FitGirl_Links.bat "links.txt" --lang english --no-bonus -o "g
 ```
 
 Use `python3` on macOS. Run with `--help` for more options.
-
 
 ## License
 
