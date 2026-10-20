@@ -1,86 +1,1462 @@
 @echo off & (python -x "%~f0" %* || (echo. & echo [!] Python is not installed or not in PATH. Please install Python 3.8+ from https://www.python.org/ & echo [Make sure to check 'Add Python to PATH' during installation] & echo. & pause)) & exit /b
-# =============================================================================
-#  FITGIRL TURBO LINK EXTRACTOR - MULTI-HOSTER ENGINE
-#  Author: 0xdenzel (chideraokonkwo.com)
-#  Hosters: FuckingFast, FileKeeper, DataNodes
-# =============================================================================
-import asyncio
-import sys
-import os
-import re
-import datetime
-import subprocess
-import argparse
-import random
-import webbrowser
-import urllib.request
+"""Standalone FitGirl link resolver. Python body of the Windows polyglot launcher."""
+from __future__ import annotations
 
-# Enable Windows ANSI Virtual Terminal Colors and UTF-8 output
-if sys.platform == "win32":
-    os.system('')
+import argparse
+import asyncio
+import base64
+import contextlib
+import ctypes
+import datetime
+import html
+import importlib
+import importlib.metadata
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+import urllib.error
+import urllib.request
+import uuid
+from dataclasses import dataclass, field
+from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
+
+VERSION = '1.3.1'
+BASE_DIR = Path(__file__).resolve().parent
+DOWNLOAD_DIR = str(Path.home() / 'Downloads')
+MAX_TEXT = 4 * 1024 * 1024
+MAX_TORRENT = 10 * 1024 * 1024
+HOST_NAMES = {'filekeeper': 'FileKeeper', 'fuckingfast': 'FuckingFast', 'datanodes': 'DataNodes'}
+HOST_ORDER = ('filekeeper', 'fuckingfast', 'datanodes')
+SUPPORTED_HOSTS = ('filekeeper', 'fuckingfast')
+URL_RE = re.compile(r'(?:https?://|magnet:\?)[^\s<>"\x00-\x20]+', re.I)
+ARCHIVE_RE = re.compile(r'\.(?:rar|7z|zip|bin|exe)(?:\.html)?$', re.I)
+RUNTIME = BASE_DIR / '.fitgirl-runtime'
+_dependencies_ready = False
+
+
+class ExtractionError(Exception):
+    """A short, user-readable error without cookie values or signed URLs."""
+
+
+@dataclass
+class Resolution:
+    status: str
+    url: str = ''
+    detail: str = ''
+
+
+@dataclass
+class PreparedBatch:
+    urls: list[str] = field(default_factory=list)
+    name: str = ''
+    alternatives: dict[str, list[str]] = field(default_factory=dict)
+    torrents: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RunSummary:
+    resolved: int = 0
+    total: int = 0
+    interrupted: bool = False
+    error: str = ''
+    output: str = ''
+    statuses: dict[str, int] = field(default_factory=dict)
+
+
+def quiet_process(args, **kwargs):
+    """Run a bounded helper without creating an extra Windows console."""
+    if sys.platform == 'win32':
+        kwargs.setdefault('creationflags', subprocess.CREATE_NO_WINDOW)
+    kwargs.setdefault('timeout', 5)
+    return subprocess.run(args, **kwargs)
+
+
+def ensure_dependencies():
+    """Install compatible dependencies locally, only when actual work needs them."""
+    global _dependencies_ready
+    if _dependencies_ready:
+        return
+    if sys.version_info < (3, 10):
+        raise ExtractionError('Python 3.10 or newer is required.')
+    packages = [
+        ('playwright', 'playwright', (1, 49), 2, 'playwright>=1.49,<2'),
+        ('playwright_stealth', 'playwright-stealth', (2, 0), 3, 'playwright-stealth>=2,<3'),
+        ('bs4', 'beautifulsoup4', (4, 12), 5, 'beautifulsoup4>=4.12,<5'),
+        ('requests', 'requests', (2, 32), 3, 'requests>=2.32,<3'),
+    ]
+    local_libs = RUNTIME / 'packages'
+    if local_libs.exists() and str(local_libs) not in sys.path:
+        sys.path.insert(0, str(local_libs))
+    missing = []
+    for module, dist, minimum, upper, spec in packages:
+        try:
+            version = tuple(int(n) for n in re.findall(r'\d+', importlib.metadata.version(dist))[:2])
+            if importlib.util.find_spec(module) is None or version < minimum or version[0] >= upper:
+                missing.append(spec)
+        except (ImportError, ValueError):
+            missing.append(spec)
+    if missing:
+        print('First-time setup: installing libraries locally...')
+        local_libs.mkdir(parents=True, exist_ok=True)
+        setup_temp = RUNTIME / 'tmp'
+        setup_temp.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env.update({key: str(setup_temp) for key in ('TMP', 'TEMP', 'TMPDIR')})
+        result = quiet_process([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check',
+                                '--no-input', '--no-cache-dir', '--upgrade', '--target', str(local_libs), *missing],
+                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+        if result.returncode:
+            raise ExtractionError('Dependency setup failed. Check internet access and pip, then retry.')
+        if str(local_libs) not in sys.path:
+            sys.path.insert(0, str(local_libs))
+        importlib.invalidate_caches()
     try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        importlib.import_module('playwright.async_api')
+        if not hasattr(importlib.import_module('playwright_stealth'), 'Stealth'):
+            raise ImportError('Stealth API unavailable')
+        importlib.import_module('bs4')
+    except ImportError as exc:
+        raise ExtractionError('Installed libraries are incompatible; restart after updating dependencies.') from exc
+    _dependencies_ready = True
+
+
+def url_parts(url):
+    try:
+        p = urlsplit(url)
+        if p.scheme.lower() not in ('http', 'https') or not p.hostname or p.username or p.password:
+            return None
+        if p.port not in (None, 80 if p.scheme.lower() == 'http' else 443):
+            return None
+        return p
+    except ValueError:
+        return None
+
+
+def detect_hoster(url: str) -> str:
+    p = url_parts(url)
+    if not p:
+        return ''
+    host = p.hostname.lower()
+    if host in ('filekeeper.net', 'www.filekeeper.net') or host == 'dlproxy.uk' or host.endswith('.dlproxy.uk'):
+        return 'filekeeper'
+    if host in ('fuckingfast.co', 'www.fuckingfast.co', 'dl.fuckingfast.co'):
+        return 'fuckingfast'
+    if host in ('datanodes.to', 'www.datanodes.to'):
+        return 'datanodes'
+    return ''
+
+
+def is_direct_link(url: str) -> bool:
+    p = url_parts(url)
+    if not p:
+        return False
+    host = p.hostname.lower()
+    return bool(
+        ((host == 'dlproxy.uk' or host.endswith('.dlproxy.uk')) and p.path not in ('', '/'))
+        or (host in ('dl.fuckingfast.co', 'fuckingfast.co') and p.path.startswith('/dl/'))
+        or (host in ('datanodes.to', 'www.datanodes.to') and p.path.startswith('/d/'))
+    )
+
+
+def is_paste(url):
+    p = url_parts(url)
+    return bool(p and p.hostname.lower() == 'paste.fitgirl-repacks.site')
+
+
+def is_repack(url):
+    p = url_parts(url)
+    return bool(p and p.hostname.lower() in ('fitgirl-repacks.site', 'www.fitgirl-repacks.site')
+                and not p.path.lower().endswith('.torrent'))
+
+
+def is_magnet(url):
+    return bool(re.match(r'^magnet:\?', url, re.I) and re.search(
+        r'(?:[?&])xt=urn:btih:(?:[a-f0-9]{40}|[a-z2-7]{32})(?:&|$)', unquote(url), re.I))
+
+
+def clean_url(url):
+    value = html.unescape(url).strip().rstrip('.,;')
+    for closing, opening in ((')', '('), (']', '[')):
+        while value.endswith(closing) and value.count(closing) > value.count(opening):
+            value = value[:-1]
+    return value.rstrip("'\"")
+
+
+def url_identity(url):
+    p = url_parts(url)
+    if not p:
+        return url
+    # Fragments label hoster files but contain essential PrivateBin decryption keys.
+    return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path, p.query, p.fragment if is_paste(url) else ''))
+
+
+def unique_urls(urls):
+    seen, result = set(), []
+    for url in urls:
+        key = url_identity(url)
+        if key not in seen:
+            seen.add(key)
+            result.append(url)
+    return result
+
+
+def extract_urls(raw_text):
+    if len(raw_text) > MAX_TEXT:
+        raise ExtractionError('Input exceeds the 4 MB text limit.')
+    text = html.unescape(raw_text).replace('\\/', '/')
+    # Decode escaped JSON strings without reserializing or changing signed URLs.
+    if text.lstrip().startswith(('{', '[')):
+        try:
+            obj = json.loads(raw_text)
+            strings = []
+            def walk(value, depth=0):
+                if depth > 30:
+                    return
+                if isinstance(value, str):
+                    strings.append(value)
+                elif isinstance(value, dict):
+                    for v in value.values(): walk(v, depth + 1)
+                elif isinstance(value, list):
+                    for v in value: walk(v, depth + 1)
+            walk(obj)
+            text = '\n'.join(strings)
+        except (ValueError, RecursionError):
+            pass
+    return unique_urls(clean_url(m.group()) for m in URL_RE.finditer(text))
+
+
+def parse_links_from_text(raw_text: str) -> list[str]:
+    return [u for u in extract_urls(raw_text) if detect_hoster(u)]
+
+
+def inspect_input(raw_text: str):
+    urls = extract_urls(raw_text)
+    return ([u for u in urls if is_paste(u)], [u for u in urls if is_repack(u)],
+            [u for u in urls if detect_hoster(u) or is_magnet(u) or is_torrent_url(u)])
+
+
+def is_torrent_url(url):
+    p = url_parts(url)
+    return bool(p and p.path.lower().endswith('.torrent'))
+
+
+def plain_text(value):
+    return ''.join(c for c in str(value) if unicodedata.category(c)[0] != 'C')
+
+
+def safe_filename(value, default='fitgirl', limit=140):
+    value = unicodedata.normalize('NFC', plain_text(value))
+    value = re.sub(r'[<>:"/\\|?*]', '_', value)
+    value = re.sub(r'\s+', '_', value).strip(' ._')[:limit].rstrip(' .')
+    if not value or value in ('.', '..'):
+        value = default
+    if re.match(r'^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', value, re.I):
+        value = '_' + value
+    return value
+
+
+def filename_hint(url):
+    p = url_parts(url)
+    if not p:
+        return ''
+    fragment = unquote(p.fragment)
+    path_name = unquote(p.path.rsplit('/', 1)[-1])
+    return fragment if ARCHIVE_RE.search(fragment) else path_name
+
+
+def detect_game_name(urls: list[str], input_source: str = ''):
+    if is_repack(input_source):
+        slug = urlsplit(input_source).path.rstrip('/').rsplit('/', 1)[-1]
+        if slug:
+            return safe_filename(unquote(slug).replace('-', '_'))
+    for url in urls:
+        hint = filename_hint(url)
+        if ARCHIVE_RE.search(hint):
+            name = re.split(r'_--_|--|\.part\d+|\.(?:rar|7z|zip|bin|exe)', hint, maxsplit=1, flags=re.I)[0]
+            if name and not name.lower().startswith('fg-'):
+                return safe_filename(name)
+    try:
+        if input_source and Path(input_source).is_file():
+            name = Path(input_source).stem
+            if name.lower() not in ('urls', 'links', 'input'):
+                return safe_filename(name)
+    except OSError:
+        pass
+    return None
+
+
+def filter_links(urls, exclude_bonus=False, keep_lang='english'):
+    result = []
+    for url in urls:
+        label = filename_hint(url).casefold()
+        if exclude_bonus and 'fg-optional' in label:
+            continue
+        if 'fg-selective' in label and keep_lang and keep_lang.casefold() not in label:
+            continue
+        result.append(url)
+    return result
+
+
+def archive_identity(url):
+    label = filename_hint(url)
+    if not ARCHIVE_RE.search(label):
+        return ''
+    label = re.sub(r'\.html$', '', label, flags=re.I)
+    label = unicodedata.normalize('NFKC', label).casefold()
+    label = re.sub(r'[ _]+', '_', label)
+    return re.sub(r'\.part0*(\d+)(?=\.)', lambda m: '.part' + str(int(m[1])), label)
+
+
+def compatible_manifest(primary, alternative):
+    """Require an exact, unique filename/part manifest before mixing mirrors."""
+    a, b = [archive_identity(u) for u in primary], [archive_identity(u) for u in alternative]
+    if not a or '' in a or '' in b or len(set(a)) != len(a) or len(set(b)) != len(b) or set(a) != set(b):
+        return {}
+    return dict(zip(b, alternative))
+
+
+def fetch_bytes(url, limit=MAX_TEXT, timeout=15):
+    request = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0', 'Accept': '*/*'})
+    try:
+        deadline = time.monotonic() + timeout
+        with urllib.request.urlopen(request, timeout=min(timeout, 5)) as response:
+            chunks, size = [], 0
+            while True:
+                if time.monotonic() >= deadline:
+                    raise ExtractionError('Source download timed out.')
+                chunk = response.read1(min(65536, limit + 1 - size))
+                if not chunk: break
+                size += len(chunk)
+                if size > limit:
+                    raise ExtractionError('Response exceeds the permitted size.')
+                chunks.append(chunk)
+            return b''.join(chunks)
+    except urllib.error.HTTPError as exc:
+        raise ExtractionError('HTTP %s while loading source.' % exc.code) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ExtractionError('Could not load source; check internet access and retry.') from exc
+
+
+def parse_repack_html(content, repack_url):
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(content, 'html.parser')
+    title = soup.select_one('h1.entry-title') or soup.title
+    title = title.get_text(' ', strip=True) if title else 'FitGirl Repack'
+    title = re.sub(r'\s+[-–—]\s*v\d.*$', '', title, flags=re.I)
+    # Some live posts close their article early; mirrors remain in content-area.
+    body = soup.select_one('.content-area') or soup.select_one('.entry-content') or soup.find('article') or soup
+    for node in body.select('script,style,nav,aside,footer,#comments,.comments-area,.related-posts,.yarpp-related'):
+        node.decompose()
+    direct, torrents, seen = [], [], set()
+    for anchor in body.select('a[href]'):
+        url = clean_url(urljoin(repack_url, anchor['href']))
+        if url_identity(url) in seen:
+            continue
+        label = anchor.get_text(' ', strip=True).casefold()
+        context_label = anchor.parent.get_text(' ', strip=True)[:400].casefold() if anchor.parent else label
+        if is_magnet(url):
+            torrents.append({'name': 'Magnet Link', 'type': 'magnet', 'url': url, 'tag': 'Open in your torrent client'})
+        elif is_torrent_url(url) or (is_paste(url) and 'torrent' in label):
+            torrents.append({'name': '.torrent File Download', 'type': 'torrent_file', 'url': url, 'tag': 'Save a verified torrent attachment'})
+        elif detect_hoster(url) or is_paste(url):
+            host = detect_hoster(url)
+            if not host:
+                host = next((h for h in HOST_ORDER if h in label), '')
+            if not host:
+                matches = [h for h in HOST_ORDER if h in context_label]
+                host = matches[0] if len(matches) == 1 else ''
+            if host:
+                tag = 'Recommended' if host == 'filekeeper' else ('Source recognition only; use matching alternate mirrors' if host == 'datanodes' else 'Direct CDN')
+                direct.append({'name': HOST_NAMES[host], 'host': host, 'url': url, 'tag': tag})
+        seen.add(url_identity(url))
+    direct.sort(key=lambda m: HOST_ORDER.index(m['host']))
+    return {'game_title': plain_text(title), 'direct_mirrors': direct, 'torrent_mirrors': torrents}
+
+
+def scrape_fitgirl_repack_mirrors(repack_url):
+    return parse_repack_html(fetch_bytes(repack_url).decode('utf-8', errors='replace'), repack_url)
+
+
+def display_width(text):
+    return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in text)
+
+
+def fit_text(text, width):
+    result, used = [], 0
+    for char in plain_text(text):
+        size = display_width(char)
+        if used + size > max(0, width): break
+        result.append(char); used += size
+    return ''.join(result)
+
+
+class Progress:
+    """One physical row; no per-file output when stdout is redirected."""
+    def __init__(self, total, stream=None):
+        self.total = total
+        self.stream = stream or sys.stdout
+        self.enabled = bool(getattr(self.stream, 'isatty', lambda: False)())
+        self.active = False
+
+    def render(self, completed, title, status, width=None):
+        width = max(1, (width or shutil.get_terminal_size((80, 24)).columns) - 1)
+        pct = int(100 * completed / self.total) if self.total else 100
+        prefix = f'{completed}/{self.total} {pct:3d}% '
+        suffix = ' ' + status
+        available = width - len(prefix) - len(suffix)
+        bar_size = max(0, min(14, available // 3))
+        bar = ''
+        if bar_size >= 3:
+            filled = int(bar_size * completed / self.total) if self.total else bar_size
+            bar = '[' + '#' * filled + '-' * (bar_size-filled) + '] '
+        label = fit_text(title, width - len(prefix) - len(bar) - len(suffix))
+        return fit_text(prefix + bar + label + suffix, width)
+
+    def update(self, completed, title, status):
+        if self.enabled:
+            row = self.render(completed, title, status)
+            self.stream.write('\r' + row + '\033[K')
+            self.stream.flush()
+            self.active = True
+
+    def finish(self):
+        if self.active:
+            self.stream.write('\n'); self.stream.flush(); self.active = False
+
+
+class ResultSink:
+    """Checkpoint complete results atomically before another async operation."""
+    def __init__(self, path):
+        self.path = Path(path).expanduser().resolve()
+        self.links = []
+
+    def add(self, url):
+        url = url.split('#', 1)[0]
+        if not is_direct_link(url) or any(c in url for c in '\r\n\x00'):
+            raise ExtractionError('Resolver returned an invalid download URL.')
+        if url not in self.links:
+            next_links = self.links + [url]
+            atomic_write(self.path, ('\n'.join(next_links) + '\n').encode('utf-8'))
+            self.links = next_links
+
+
+def atomic_write(path, content):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        with temporary.open('xb') as handle:
+            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        with contextlib.suppress(OSError): temporary.unlink()
+
+
+async def bounded_close(awaitable, seconds=5):
+    """Finish cleanup under cancellation, with a finite deadline."""
+    task = asyncio.ensure_future(awaitable)
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=seconds)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=seconds)
+        except (Exception, asyncio.CancelledError):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        raise
+    except Exception:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def install_browser(env):
+    """Cancel the setup process tree instead of leaving a worker thread running."""
+    options = {'creationflags': subprocess.CREATE_NO_WINDOW} if sys.platform == 'win32' else {'start_new_session': True}
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, '-m', 'playwright', 'install', 'chromium',
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+
+    async def stop():
+        if process.returncode is not None:
+            return
+        if sys.platform == 'win32':
+            try:
+                killer = await asyncio.create_subprocess_exec(
+                    'taskkill', '/PID', str(process.pid), '/T', '/F',
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW)
+                try:
+                    await asyncio.wait_for(killer.wait(), 3)
+                finally:
+                    if killer.returncode is None:
+                        killer.kill()
+                        await killer.wait()
+            except OSError:
+                process.kill()
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(process.wait(), 3)
+        except asyncio.TimeoutError:
+            if sys.platform == 'win32':
+                with contextlib.suppress(ProcessLookupError): process.kill()
+            else:
+                with contextlib.suppress(ProcessLookupError): os.killpg(process.pid, signal.SIGKILL)
+            await process.wait()
+
+    try:
+        code = await asyncio.wait_for(process.wait(), 300)
+    except BaseException:
+        await bounded_close(stop(), 8)
+        raise
+    if code:
+        raise ExtractionError('Browser setup failed. Check internet access and disk space, then retry.')
+
+
+class BrowserSession:
+    """Lazy headless browser, ephemeral per-host cookies, fresh per-file pages."""
+    def __init__(self, block_assets=True):
+        self.block_assets = block_assets
+        self.driver = None
+        self.browser = None
+        self.contexts = {}
+        self.allowed_pages = set()
+        self.tasks = set()
+        self.opening = set()
+        self.old_temp = None
+
+    async def __aenter__(self):
+        return self
+
+    def track(self, awaitable):
+        task = asyncio.create_task(awaitable)
+        self.tasks.add(task)
+        def done(t):
+            self.tasks.discard(t)
+            if not t.cancelled():
+                with contextlib.suppress(Exception): t.exception()
+        task.add_done_callback(done)
+        return task
+
+    async def start(self):
+        if self.browser:
+            return
+        ensure_dependencies()
+        from playwright.async_api import async_playwright
+        temp_dir = RUNTIME / 'tmp'
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        browser_dir = RUNTIME / 'browsers'
+        self.old_temp = {k: os.environ.get(k) for k in ('TMP', 'TEMP', 'TMPDIR', 'PLAYWRIGHT_BROWSERS_PATH')}
+        for key in ('TMP', 'TEMP', 'TMPDIR'):
+            os.environ[key] = str(temp_dir)
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(browser_dir)
+        self.driver = await async_playwright().start()
+        try:
+            self.browser = await self.driver.chromium.launch(headless=True, channel='chrome', downloads_path=str(temp_dir))
+        except Exception:
+            try:
+                self.browser = await self.driver.chromium.launch(headless=True, downloads_path=str(temp_dir))
+            except Exception:
+                # Only bootstrap when the expected browser executable is absent.
+                if Path(self.driver.chromium.executable_path).exists():
+                    raise ExtractionError('Headless Chromium could not start. Check OS/browser compatibility.')
+                print('First-time setup: installing a headless browser locally...')
+                env = dict(os.environ)
+                local_packages = str(RUNTIME / 'packages')
+                env['PYTHONPATH'] = local_packages + os.pathsep + env.get('PYTHONPATH', '')
+                await install_browser(env)
+                self.browser = await self.driver.chromium.launch(headless=True, downloads_path=str(temp_dir))
+
+    async def get_page(self, host='source'):
+        await self.start()
+        context = self.contexts.get(host)
+        if context is None:
+            options = {}
+            if host == 'fuckingfast':
+                # Keep HTTP and JS identities consistent, using the installed version.
+                platform = 'Macintosh; Intel Mac OS X 10_15_7' if sys.platform == 'darwin' else ('X11; Linux x86_64' if sys.platform.startswith('linux') else 'Windows NT 10.0; Win64; x64')
+                options['user_agent'] = f'Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.browser.version} Safari/537.36'
+                options['locale'] = 'en-US'
+            context = await self.browser.new_context(accept_downloads=False, service_workers='block', **options)
+            self.contexts[host] = context
+            async def route_assets(route):
+                if self.block_assets and route.request.resource_type in ('image', 'media', 'font'):
+                    await route.abort()
+                else:
+                    await route.continue_()
+            await context.route('**/*', route_assets)
+            def page_created(page):
+                # new_page() fires the event before returning the intended page.
+                if host not in self.opening:
+                    self.track(page.close())
+            context.on('page', page_created)
+        self.opening.add(host)
+        try:
+            page = await context.new_page()
+        finally:
+            self.opening.discard(host)
+        self.allowed_pages.add(page)
+        page.set_default_timeout(8000)
+        page.set_default_navigation_timeout(20000)
+        if host == 'fuckingfast':
+            from playwright_stealth import Stealth
+            try:
+                await Stealth().apply_stealth_async(page)
+            except BaseException:
+                await self.close_page(page)
+                raise
+        return page
+
+    async def close_page(self, page):
+        self.allowed_pages.discard(page)
+        await bounded_close(page.close(), 3)
+
+    async def close(self):
+        try:
+            for context in list(self.contexts.values()):
+                await bounded_close(context.close(), 3)
+            self.contexts.clear()
+            if self.tasks:
+                await bounded_close(asyncio.gather(*list(self.tasks), return_exceptions=True), 3)
+            if self.browser:
+                await bounded_close(self.browser.close(), 5)
+            if self.driver:
+                await bounded_close(self.driver.stop(), 5)
+        finally:
+            self.allowed_pages.clear()
+            self.browser = self.driver = None
+            if self.old_temp is not None:
+                for key, value in self.old_temp.items():
+                    if value is None: os.environ.pop(key, None)
+                    else: os.environ[key] = value
+                self.old_temp = None
+
+    async def __aexit__(self, *exc):
+        await bounded_close(self.close(), 15)
+
+
+def paste_error(text):
+    lower = text.casefold()
+    if re.search(r'paste.*(?:expired|deleted|does not exist)|paste not found', lower):
+        return 'This paste has expired or was deleted.'
+    if re.search(r'(?:enter|requires?|protected.*with|wrong).*password|password.protected', lower):
+        return 'This paste requires a password; password-protected pastes are not supported.'
+    if re.search(r'could not decrypt|cannot decrypt|invalid ciphertext|decryption failed|wrong decryption key', lower):
+        return 'The paste could not be decrypted. Check its complete URL and key.'
+    return ''
+
+
+async def load_paste(page, paste_url, attachment=False, timeout=20):
+    p = url_parts(paste_url)
+    if not is_paste(paste_url) or not p.query or not p.fragment:
+        raise ExtractionError('PrivateBin URLs must include both the paste ID and #decryption-key.')
+    response = await page.goto(paste_url, wait_until='domcontentloaded', timeout=20000)
+    if response and response.status >= 400:
+        raise ExtractionError('Paste server returned HTTP %s.' % response.status)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = await page.inner_text('body')
+        error = paste_error(text)
+        if error:
+            raise ExtractionError(error)
+        if attachment:
+            anchor = page.locator('#attachment a[href], a[download], a:has-text("Download attachment")')
+            if await anchor.count():
+                return anchor.first
+        else:
+            links = parse_links_from_text(text)
+            if links:
+                return links
+            empty = await page.locator('#plaintext, #prettyprint').count()
+            if empty:
+                content = await page.locator('#plaintext, #prettyprint').first.inner_text()
+                if content.strip():
+                    raise ExtractionError('The decrypted paste contains no supported download URLs.')
+        await asyncio.sleep(0.15)
+    raise ExtractionError('Paste decryption timed out or its schema is unsupported.')
+
+
+async def extract_links_from_paste(page, paste_url):
+    return await load_paste(page, paste_url)
+
+
+async def extract_links_from_fitgirl_page(page, repack_url):
+    await page.goto(repack_url, wait_until='domcontentloaded', timeout=20000)
+    return parse_links_from_text(await page.content())
+
+
+async def wait_event(event, seconds):
+    try:
+        await asyncio.wait_for(event.wait(), timeout=seconds)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+def page_failure(status, text):
+    if status in (404, 410):
+        return Resolution('removed')
+    if status == 429:
+        return Resolution('rate_limited')
+    if status in (401, 403):
+        return Resolution('verification_required')
+    if status and status >= 500:
+        return Resolution('transient')
+    lines = [line.strip().casefold().rstrip('.!') for line in text.splitlines()]
+    if any(line in ('file not found', 'file has been removed', '404 not found', 'file does not exist') for line in lines):
+        return Resolution('removed')
+    if any('too many requests' in line or line == 'rate limited' for line in lines):
+        return Resolution('rate_limited')
+    return None
+
+
+async def resolve_on_page(page, url, host=None, deadline=30, on_success=None):
+    """Capture only a trusted host's candidate and stop before its payload loads."""
+    host = host or detect_hoster(url)
+    if not host:
+        return Resolution('unsupported')
+    if is_direct_link(url):
+        if on_success: on_success(url.split('#', 1)[0])
+        return Resolution('success', url.split('#', 1)[0])
+    if host == 'datanodes':
+        return Resolution('alternative_required')
+    ready = asyncio.Event()
+    captured = ''
+    pending = set()
+    failure = None
+    def capture(candidate, base=''):
+        nonlocal captured
+        candidate = urljoin(base, candidate)
+        if not captured and is_direct_link(candidate) and detect_hoster(candidate) == host:
+            captured = candidate.split('#', 1)[0]
+            ready.set()
+    def track(coro):
+        task = asyncio.create_task(coro)
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    def on_download(download):
+        capture(download.url)
+        track(download.cancel())
+    def on_response(response):
+        nonlocal failure
+        if not 200 <= response.status < 400:
+            if detect_hoster(response.url) == host and response.request.resource_type == 'document':
+                failure = page_failure(response.status, '')
+            return
+        for value in (response.headers.get('hx-redirect'), response.headers.get('location')):
+            if value: capture(value, response.url)
+    async def capture_route(route):
+        if is_direct_link(route.request.url):
+            capture(route.request.url)
+            await route.abort()
+        else:
+            await route.fallback()
+    page.on('download', on_download)
+    page.on('response', on_response)
+
+    async def flow():
+        nonlocal failure
+        response = await page.goto(url.split('#', 1)[0], wait_until='domcontentloaded', timeout=20000)
+        if captured:
+            return Resolution('success', captured)
+        text = await page.inner_text('body')
+        failure = page_failure(response.status if response else None, text)
+        if failure:
+            return failure
+        if host == 'filekeeper':
+            code = urlsplit(url).path.strip('/').split('/')[0]
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', code):
+                return Resolution('invalid')
+            await page.evaluate('''code => {
+                const f=document.createElement('form'); f.method='POST'; f.action='/download';
+                const fields={op:'download2',id:code,rand:'',referer:'',method_free:'Free download',down_direct:'1'};
+                for(const [name,value] of Object.entries(fields)) {
+                    const i=document.createElement('input'); i.type='hidden';i.name=name;i.value=value;f.appendChild(i);
+                } document.body.appendChild(f); f.submit();
+            }''', code)
+            await wait_event(ready, 10)
+        elif host == 'fuckingfast':
+            button = page.locator('a:has-text("DOWNLOAD"), button:has-text("DOWNLOAD")').first
+            await button.wait_for(state='visible', timeout=8000)
+            for _ in range(2):
+                if captured: break
+                # A click may detach its target after producing a valid redirect.
+                try:
+                    await button.click(timeout=4000, no_wait_after=True)
+                except Exception:
+                    if captured: break
+                if await wait_event(ready, 2): break
+            if not captured:
+                await wait_event(ready, 5)
+        if captured:
+            return Resolution('success', captured)
+        if failure:
+            return failure
+        late_failure = page_failure(None, await page.inner_text('body'))
+        if late_failure:
+            return late_failure
+        if await page.locator('.cf-turnstile, iframe[src*="challenges.cloudflare.com"]').count():
+            return Resolution('verification_required')
+        return Resolution('transient')
+
+    try:
+        await page.route('**/*', capture_route)
+        try:
+            result = await asyncio.wait_for(flow(), deadline)
+            result = Resolution('success', captured) if captured else result
+        except asyncio.CancelledError:
+            if captured and on_success: on_success(captured)
+            raise
+        except Exception:
+            result = Resolution('success', captured) if captured else (failure or Resolution('transient'))
+        # Persistence precedes listener/page cleanup, so Ctrl+C during cleanup is safe.
+        if result.status == 'success' and on_success:
+            on_success(result.url)
+        return result
+    finally:
+        page.remove_listener('download', on_download)
+        page.remove_listener('response', on_response)
+        with contextlib.suppress(Exception):
+            await page.unroute('**/*', capture_route)
+        if pending:
+            await bounded_close(asyncio.gather(*list(pending), return_exceptions=True), 3)
+
+
+async def resolve_url(session, url, attempts=2, on_success=None):
+    if is_direct_link(url):
+        if on_success: on_success(url.split('#', 1)[0])
+        return Resolution('success', url.split('#', 1)[0])
+    host = detect_hoster(url)
+    if not host:
+        return Resolution('unsupported')
+    if host == 'datanodes':
+        return Resolution('alternative_required')
+    result = Resolution('transient')
+    for attempt in range(attempts):
+        page = await session.get_page(host)
+        try:
+            result = await resolve_on_page(page, url, host, on_success=on_success)
+        finally:
+            await session.close_page(page)
+        if result.status not in ('transient', 'rate_limited'):
+            break
+        if attempt + 1 < attempts:
+            await asyncio.sleep(min(8, (2 ** attempt) * (3 if result.status == 'rate_limited' else 0.6)))
+    return result
+
+
+async def extract_direct_download(page, url, retries=1):
+    """Legacy string API; new code consumes explicit Resolution states."""
+    result = await resolve_on_page(page, url)
+    return result.url if result.status == 'success' else ('REMOVED' if result.status == 'removed' else None)
+
+
+async def extract_fuckingfast(page, url, retries=1):
+    return await extract_direct_download(page, url, retries)
+
+
+async def extract_filekeeper(page, url, retries=1):
+    return await extract_direct_download(page, url, retries)
+
+
+async def extract_datanodes(page, url, retries=1):
+    """Compatibility API: direct URLs only; landing pages require alternatives."""
+    return await extract_direct_download(page, url, retries)
+
+
+def clipboard_windows(text=None):
+    """Read/write CF_UNICODETEXT, with ownership and locks released on all paths."""
+    from ctypes import wintypes
+    user, kernel = ctypes.windll.user32, ctypes.windll.kernel32
+    specs = [
+        (user.OpenClipboard, [wintypes.HWND], wintypes.BOOL),
+        (user.CloseClipboard, [], wintypes.BOOL),
+        (user.EmptyClipboard, [], wintypes.BOOL),
+        (user.GetClipboardData, [wintypes.UINT], wintypes.HANDLE),
+        (user.SetClipboardData, [wintypes.UINT, wintypes.HANDLE], wintypes.HANDLE),
+        (kernel.GlobalAlloc, [wintypes.UINT, ctypes.c_size_t], wintypes.HANDLE),
+        (kernel.GlobalLock, [wintypes.HANDLE], ctypes.c_void_p),
+        (kernel.GlobalUnlock, [wintypes.HANDLE], wintypes.BOOL),
+        (kernel.GlobalFree, [wintypes.HANDLE], wintypes.HANDLE),
+        (kernel.GetConsoleWindow, [], wintypes.HWND),
+    ]
+    for function, args, result in specs:
+        function.argtypes, function.restype = args, result
+    owner = kernel.GetConsoleWindow()
+    for _ in range(5):
+        if user.OpenClipboard(owner):
+            break
+        time.sleep(0.04)
+    else:
+        return '' if text is None else False
+    handle, transferred = None, False
+    try:
+        if text is None:
+            handle = user.GetClipboardData(13)
+            pointer = kernel.GlobalLock(handle) if handle else None
+            if not pointer:
+                return ''
+            try:
+                return ctypes.wstring_at(pointer)
+            finally:
+                kernel.GlobalUnlock(handle)
+        data = (text + '\0').encode('utf-16-le')
+        handle = kernel.GlobalAlloc(0x0002, len(data))
+        if not handle:
+            return False
+        pointer = kernel.GlobalLock(handle)
+        if not pointer:
+            return False
+        try:
+            ctypes.memmove(pointer, data, len(data))
+        finally:
+            kernel.GlobalUnlock(handle)
+        if not user.EmptyClipboard():
+            return False
+        transferred = bool(user.SetClipboardData(13, handle))
+        return transferred
+    finally:
+        if text is not None and handle and not transferred:
+            kernel.GlobalFree(handle)
+        user.CloseClipboard()
+
+
+def clipboard_commands(write=False):
+    if sys.platform == 'darwin':
+        return [['pbcopy' if write else 'pbpaste']]
+    return ([['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']]
+            if write else [['wl-paste', '--no-newline'], ['xclip', '-selection', 'clipboard', '-o'], ['xsel', '--clipboard', '--output']])
+
+
+def get_clipboard_text():
+    try:
+        if sys.platform == 'win32':
+            return clipboard_windows().strip()
+        for command in clipboard_commands():
+            if shutil.which(command[0]):
+                try:
+                    result = quiet_process(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2)
+                    if result.returncode == 0:
+                        return result.stdout.decode('utf-8', errors='replace').strip()
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
     except Exception:
         pass
+    return ''
 
-# Color Palette
+
+def copy_to_clipboard(text):
+    try:
+        if sys.platform == 'win32':
+            return bool(clipboard_windows(text))
+        for command in clipboard_commands(write=True):
+            if shutil.which(command[0]):
+                try:
+                    result = quiet_process(command, input=text.encode('utf-8'), stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.PIPE, timeout=2)
+                    if result.returncode == 0:
+                        return True
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+    except Exception:
+        pass
+    return False
+
+
+def reveal_file(path):
+    path = str(Path(path).resolve())
+    try:
+        if sys.platform == 'win32':
+            quiet_process(['explorer.exe', '/select,' + path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == 'darwin':
+            quiet_process(['open', '-R', path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif shutil.which('xdg-open'):
+            quiet_process(['xdg-open', str(Path(path).parent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            return False
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def open_default(target):
+    try:
+        if sys.platform == 'win32':
+            os.startfile(target)
+        else:
+            quiet_process(['open' if sys.platform == 'darwin' else 'xdg-open', target],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def ask(prompt, default=''):
+    try:
+        return input(prompt).strip() or default
+    except EOFError:
+        return default
+
+
+def valid_torrent(data):
+    """Bounded bencode parser; accept v1 or v2 info dictionaries, not HTML errors."""
+    if not data or len(data) > MAX_TORRENT:
+        return False
+    position, items = 0, 0
+    def parse(depth=0):
+        nonlocal position, items
+        items += 1
+        if depth > 30 or items > 100000 or position >= len(data):
+            raise ValueError('invalid bencode')
+        tag = data[position:position+1]
+        if tag == b'i':
+            end = data.index(b'e', position)
+            value = data[position+1:end]
+            if not re.fullmatch(rb'(?:0|-?[1-9]\d*)', value): raise ValueError('integer')
+            position = end + 1
+            return int(value)
+        if tag in (b'l', b'd'):
+            position += 1
+            result = [] if tag == b'l' else {}
+            while data[position:position+1] != b'e':
+                key = parse(depth+1)
+                if tag == b'l': result.append(key)
+                else:
+                    if not isinstance(key, bytes) or key in result: raise ValueError('dict key')
+                    result[key] = parse(depth+1)
+            position += 1
+            return result
+        end = data.index(b':', position)
+        length = data[position:end]
+        if not re.fullmatch(rb'(?:0|[1-9]\d*)', length): raise ValueError('string length')
+        size = int(length)
+        position = end + 1
+        if position + size > len(data): raise ValueError('truncated')
+        value = data[position:position+size]; position += size
+        return value
+    try:
+        torrent = parse()
+        info = torrent.get(b'info') if isinstance(torrent, dict) else None
+        if position != len(data) or not isinstance(info, dict) or not isinstance(info.get(b'name'), bytes):
+            return False
+        if not isinstance(info.get(b'piece length'), int) or info[b'piece length'] <= 0:
+            return False
+        if info.get(b'meta version') == 2:
+            return isinstance(info.get(b'file tree'), dict)
+        return isinstance(info.get(b'pieces'), bytes) and len(info[b'pieces']) % 20 == 0 and (
+            isinstance(info.get(b'length'), int) and info[b'length'] >= 0 or isinstance(info.get(b'files'), list))
+    except (ValueError, IndexError, OverflowError, RecursionError):
+        return False
+
+
+async def download_torrent_attachment(page, paste_url, output_dir=DOWNLOAD_DIR, output_path=None):
+    anchor = await load_paste(page, paste_url, attachment=True)
+    attachment = await anchor.evaluate('''async (a, limit) => {
+        const response=await fetch(a.href);
+        if(!response.ok) throw new Error('Attachment unavailable');
+        const reader=response.body.getReader();const chunks=[];let length=0;
+        try { while(true) { const {value,done}=await reader.read(); if(done) break;
+            length+=value.byteLength; if(length>limit) throw new Error('Attachment too large'); chunks.push(value);
+        }} finally {await reader.cancel();}
+        let binary='';for(const bytes of chunks) for(let i=0;i<bytes.length;i+=8192) binary+=String.fromCharCode(...bytes.subarray(i,i+8192));
+        return {name:a.download||'game.torrent',data:btoa(binary)};
+    }''', MAX_TORRENT)
+    data = base64.b64decode(attachment['data'], validate=True)
+    filename = safe_filename(attachment['name'], 'game.torrent')
+    if not filename.lower().endswith('.torrent') or not valid_torrent(data):
+        raise ExtractionError('Attachment is not a valid .torrent file.')
+    path = Path(output_path) if output_path else Path(output_dir) / filename
+    if path.suffix.lower() != '.torrent':
+        raise ExtractionError('Torrent output must have a .torrent extension.')
+    atomic_write(path, data)
+    return str(path.resolve())
+
+
+def read_source(source):
+    value = source.strip().strip('"').strip("'")
+    # URL strings are not filesystem paths (avoids Windows invalid-name errors).
+    if not re.match(r'^(?:https?://|magnet:)', value, re.I) and '\n' not in value:
+        try:
+            path = Path(value).expanduser()
+            if path.is_file():
+                with path.open('rb') as stream:
+                    data = stream.read(MAX_TEXT + 1)
+                if len(data) > MAX_TEXT:
+                    raise ExtractionError('Input file exceeds the 4 MB text limit.')
+                try:
+                    return data.decode('utf-16' if data.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig')
+                except UnicodeError as exc:
+                    raise ExtractionError('Input file must use UTF-8 or BOM-marked UTF-16.') from exc
+        except OSError as exc:
+            raise ExtractionError('Could not read the input file.') from exc
+    return value
+
+
+async def collect_sources(urls, session):
+    collected = []
+    for url in urls:
+        if detect_hoster(url):
+            collected.append(url)
+        elif is_paste(url):
+            page = await session.get_page('source')
+            try:
+                collected.extend(await extract_links_from_paste(page, url))
+            finally:
+                await session.close_page(page)
+    return unique_urls(collected)
+
+
+def choose_mirror(data, mirror=None, interactive=False):
+    groups = {}
+    for item in data['direct_mirrors']:
+        groups.setdefault(item['host'], []).append(item['url'])
+    if mirror and mirror != 'auto':
+        if mirror not in groups:
+            raise ExtractionError('Selected mirror is not present on this repack page.')
+        return mirror, groups, None
+    if interactive:
+        options = [('host', h) for h in SUPPORTED_HOSTS if h in groups]
+        options += [('torrent', t) for t in data['torrent_mirrors']]
+        if options:
+            print('\n' + plain_text(data['game_title']))
+            for index, (kind, value) in enumerate(options, 1):
+                label = HOST_NAMES[value] if kind == 'host' else value['name']
+                note = ' (recommended)' if value == 'filekeeper' else ''
+                print(f'  [{index}] {label}{note}')
+            answer = ask(f'Select mirror [1-{len(options)}, default=1]: ', '1')
+            if not answer.isdigit() or not 1 <= int(answer) <= len(options):
+                raise ExtractionError('Invalid mirror selection.')
+            kind, value = options[int(answer)-1]
+            return (value, groups, None) if kind == 'host' else ('', groups, value['url'])
+    selected = next((h for h in SUPPORTED_HOSTS if h in groups), '')
+    if not selected:
+        raise ExtractionError('No FileKeeper or FuckingFast mirrors found. DataNodes landing pages are unsupported; use a torrent link or another source.')
+    return selected, groups, None
+
+
+async def prepare_batch(source, session, mirror=None, interactive=False):
+    batch = PreparedBatch()
+    for url in extract_urls(read_source(source)):
+        if is_magnet(url) or is_torrent_url(url):
+            batch.torrents.append(url)
+        elif is_repack(url):
+            data = await asyncio.to_thread(scrape_fitgirl_repack_mirrors, url)
+            selected, groups, torrent = choose_mirror(data, mirror, interactive)
+            if torrent:
+                batch.torrents.append(torrent)
+                continue
+            primary = [u for u in await collect_sources(groups[selected], session) if detect_hoster(u) == selected]
+            if not primary:
+                raise ExtractionError('Selected mirror contains no supported links.')
+            batch.urls.extend(primary)
+            batch.name = batch.name or safe_filename(data['game_title'])
+            # Alternatives are prepared before progress starts, never during a row update.
+            if selected == 'datanodes':
+                batch.warnings.append('DataNodes extraction is unsupported. Using matching FileKeeper/FuckingFast alternatives only.')
+                for host in ('filekeeper', 'fuckingfast'):
+                    if host not in groups: continue
+                    try:
+                        other = [u for u in await collect_sources(groups[host], session) if detect_hoster(u) == host]
+                    except ExtractionError:
+                        batch.warnings.append(HOST_NAMES[host] + ' fallback could not be loaded.')
+                        continue
+                    mapping = compatible_manifest(primary, other)
+                    if not mapping:
+                        batch.warnings.append(HOST_NAMES[host] + ' fallback omitted: archive manifests differ or lack filenames.')
+                    for original in primary:
+                        if archive_identity(original) in mapping:
+                            batch.alternatives.setdefault(url_identity(original), []).append(mapping[archive_identity(original)])
+        elif detect_hoster(url):
+            batch.urls.append(url)
+        elif is_paste(url):
+            batch.urls.extend(await collect_sources([url], session))
+    batch.urls = unique_urls(batch.urls)
+    batch.name = batch.name or detect_game_name(batch.urls, source) or 'fitgirl_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    return batch
+
+
+async def process_batch(urls, alternatives, session, sink, progress):
+    """Sequential host-aware resolution; checkpoints precede every next await."""
+    summary = RunSummary(total=len(urls), output=str(sink.path))
+    blocked = {}
+    for index, url in enumerate(urls):
+        title = filename_hint(url) or f'Part {index+1}'
+        progress.update(index, title, '> resolving')
+        host = detect_hoster(url)
+        if host == 'datanodes' and not is_direct_link(url):
+            result = Resolution('alternative_required')
+        else:
+            result = Resolution(blocked[host]) if host in blocked and not is_direct_link(url) else await resolve_url(session, url, on_success=sink.add)
+        if result.status == 'verification_required':
+            blocked[host] = result.status
+        if result.status != 'success' and host == 'datanodes':
+            for alternative in alternatives.get(url_identity(url), []):
+                alt_host = detect_hoster(alternative)
+                if alt_host in blocked: continue
+                progress.update(index, title, '> ' + HOST_NAMES.get(alt_host, 'fallback'))
+                result = await resolve_url(session, alternative, on_success=sink.add)
+                if result.status == 'verification_required': blocked[alt_host] = result.status
+                if result.status == 'success': break
+        if result.status == 'success':
+            sink.add(result.url)
+            summary.resolved = len(sink.links)
+        summary.statuses[result.status] = summary.statuses.get(result.status, 0) + 1
+        label = {'success': '+ OK', 'removed': 'x removed', 'verification_required': '! verify',
+                 'rate_limited': '! limited', 'alternative_required': '! use alternate'}.get(result.status, 'x failed')
+        progress.update(index+1, title, label)
+    return summary
+
+
+async def handle_torrent(source, session, output_path=None, interactive=False):
+    if is_magnet(source):
+        copied = copy_to_clipboard(source)
+        print('Magnet copied to clipboard.' if copied else 'Clipboard unavailable. Magnet: ' + source)
+        if interactive and ask('Open in your default torrent client? [Y/n]: ', 'y').lower() in ('y', 'yes'):
+            if not open_default(source): print('Could not open the default torrent client.')
+        return ''
+    if is_paste(source):
+        page = await session.get_page('source')
+        try:
+            saved = await asyncio.wait_for(download_torrent_attachment(page, source, DOWNLOAD_DIR, output_path), 45)
+        finally:
+            await session.close_page(page)
+    else:
+        data = await asyncio.to_thread(fetch_bytes, source, MAX_TORRENT)
+        if not valid_torrent(data):
+            raise ExtractionError('The response is not a valid .torrent file.')
+        name = safe_filename(unquote(urlsplit(source).path.rsplit('/', 1)[-1]), 'game.torrent')
+        path = Path(output_path) if output_path else Path(DOWNLOAD_DIR) / name
+        if path.suffix.lower() != '.torrent': raise ExtractionError('Torrent output must have a .torrent extension.')
+        atomic_write(path, data)
+        saved = str(path.resolve())
+    print('Torrent saved: ' + saved)
+    copy_to_clipboard(saved); reveal_file(saved)
+    if interactive and ask('Open in your default torrent client? [Y/n]: ', 'y').lower() in ('y', 'yes'):
+        if not open_default(saved): print('Could not open the default torrent client.')
+    return saved
+
+
+async def run_pipeline(input_source, output_path=None, exclude_bonus=False, keep_lang='english', *, mirror=None, interactive=False, handoff=True):
+    sink, progress = None, None
+    summary = RunSummary()
+    try:
+        inputs = extract_urls(read_source(input_source))
+        if any(is_repack(u) or is_paste(u) or (detect_hoster(u) in SUPPORTED_HOSTS and not is_direct_link(u)) for u in inputs):
+            ensure_dependencies()
+        async with BrowserSession() as session:
+            batch = await prepare_batch(input_source, session, mirror, interactive)
+            for warning in batch.warnings[:3]: print('Note: ' + warning)
+            if batch.torrents and batch.urls and output_path:
+                raise ExtractionError('Use separate runs for mixed torrent and direct links with --output.')
+            if len(batch.torrents) > 1 and output_path:
+                raise ExtractionError('A single --output cannot name multiple torrent files.')
+            for torrent in batch.torrents:
+                await handle_torrent(torrent, session, output_path, interactive)
+            urls = filter_links(batch.urls, exclude_bonus, keep_lang)
+            summary.total = len(urls)
+            if not urls:
+                if not batch.torrents:
+                    print('No supported links remain after parsing and filtering.')
+                return summary
+            path = output_path or str(Path(DOWNLOAD_DIR) / (safe_filename(batch.name) + '_links.txt'))
+            sink = ResultSink(path)
+            summary.output = str(sink.path)
+            # Bootstrap before a progress row exists, keeping installer output separate.
+            if any(not is_direct_link(u) and detect_hoster(u) in SUPPORTED_HOSTS for u in urls) or batch.alternatives:
+                await session.start()
+            print(f'Resolving {len(urls)} links for {plain_text(batch.name)}. Ctrl+C saves progress.')
+            progress = Progress(len(urls))
+            summary = await process_batch(urls, batch.alternatives, session, sink, progress)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        summary.interrupted = True
+    except Exception as exc:
+        summary.error = str(exc) if isinstance(exc, ExtractionError) else 'Resolution stopped (' + type(exc).__name__ + ').'
+    finally:
+        if progress: progress.finish()
+        if sink:
+            summary.resolved = len(sink.links)
+            summary.output = str(sink.path)
+            if sink.links:
+                copied = False
+                if handoff:
+                    with contextlib.suppress(Exception): copied = copy_to_clipboard('\n'.join(sink.links))
+                    with contextlib.suppress(Exception): reveal_file(sink.path)
+                label = 'Partial results saved' if summary.interrupted or summary.error else 'Links saved'
+                print(f'{label}: {summary.resolved}/{summary.total}\n{sink.path}')
+                if handoff: print('Copied to clipboard.' if copied else 'Clipboard unavailable; use the saved file.')
+            elif summary.total:
+                print('No links were resolved; any existing output file was left unchanged.')
+        if summary.interrupted: print('Cancelled. Completed links have been preserved.')
+        if summary.error: print('Error: ' + plain_text(summary.error))
+    if summary.statuses.get('verification_required'):
+        print('Some files require host verification. No matching working fallback was available.')
+    if summary.statuses.get('alternative_required'):
+        print('DataNodes landing pages are unsupported. Use the original repack page and choose FileKeeper or FuckingFast.')
+    if sink and sink.links and interactive and not summary.interrupted and not summary.error:
+        offer_download_manager()
+    return summary
+
+
+def offer_download_manager():
+    managers = get_installed_download_managers()
+    if not managers:
+        return
+    name, target, kind = managers[0]
+    if ask(f'Open {name}? [Y/n]: ', 'y').lower() not in ('y', 'yes'):
+        return
+    try:
+        if kind == 'mac_open':
+            quiet_process(['open', target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen([target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             **({'creationflags': subprocess.CREATE_NO_WINDOW} if sys.platform == 'win32' else {}))
+    except OSError:
+        print('Could not launch the download manager. Import the saved file manually.')
+
+
+async def handle_repack_mirror_selection(repack_url, output_path=None, exclude_bonus=False, keep_lang='english', **kwargs):
+    return await run_pipeline(repack_url, output_path, exclude_bonus, keep_lang,
+                              interactive=kwargs.pop('interactive', True), **kwargs)
+
+
+def enable_terminal():
+    if sys.platform == 'win32':
+        for stream in (sys.stdout, sys.stderr):
+            with contextlib.suppress(Exception): stream.reconfigure(encoding='utf-8', errors='replace')
+        try:
+            from ctypes import wintypes
+            kernel = ctypes.windll.kernel32
+            kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+            kernel.GetStdHandle.restype = wintypes.HANDLE
+            kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            handle = kernel.GetStdHandle(-11)
+            mode = wintypes.DWORD()
+            if kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+                kernel.SetConsoleMode(handle, mode.value | 4)
+        except Exception:
+            pass
+
+
+def interactive_menu():
+    print(BANNER)
+    clipboard = get_clipboard_text()
+    source = ''
+    try:
+        found = any(inspect_input(clipboard))
+    except ExtractionError:
+        found = False
+    if found:
+        if ask('Supported links found in clipboard. Enter to use, or P to paste manually: ').lower() != 'p':
+            source = clipboard
+    if not source:
+        print('Paste a URL, file path, or link list. End a list with an empty line:')
+        lines = []
+        while True:
+            try:
+                line = input().strip()
+            except EOFError:
+                break
+            if not line: break
+            lines.append(line)
+            if len(lines) == 1 and (is_paste(line) or is_repack(line) or is_magnet(line) or is_torrent_url(line)):
+                break
+            if len(lines) == 1 and not re.match(r'https?://', line, re.I):
+                break
+        source = '\n'.join(lines)
+    if not source:
+        print('No input provided.')
+        return
+    exclude = ask('Exclude optional bonus files? [y/N]: ', 'n').lower() in ('y', 'yes')
+    lang = ask('Language: Enter for English, N for all, or type a language: ', 'english').lower()
+    lang = None if lang in ('n', 'all', 'none') else ('english' if lang in ('y', 'yes') else lang)
+    asyncio.run(run_pipeline(source, None, exclude, lang, interactive=True))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='FitGirl Turbo Link Extractor - silent headless mirror resolution')
+    parser.add_argument('source', nargs='?', help='Repack/paste URL, hoster links, magnet, .torrent URL, or text file')
+    parser.add_argument('-o', '--output', help='Output file (default: <Game_Name>_links.txt in Downloads)')
+    parser.add_argument('--no-bonus', action='store_true', help='Exclude fg-optional files')
+    parser.add_argument('--lang', default='english', help='Selective language to retain, or all (default: english)')
+    # Accept the old datanodes option only for matching alternate manifests.
+    parser.add_argument('--mirror', choices=['auto', *HOST_ORDER], metavar='{auto,filekeeper,fuckingfast}',
+                        help='Choose a supported repack hoster; auto prefers FileKeeper')
+    parser.add_argument('--version', action='version', version=VERSION)
+    args = parser.parse_args(argv)
+    enable_terminal()
+    if sys.version_info < (3, 10):
+        print('Python 3.10 or newer is required. Install it from https://www.python.org/.')
+        return 1
+    try:
+        if args.source:
+            language = None if args.lang.lower() in ('all', 'none') else args.lang.lower()
+            interactive = sys.stdin.isatty() and args.mirror is None
+            summary = asyncio.run(run_pipeline(args.source, args.output, args.no_bonus, language,
+                                                mirror=args.mirror, interactive=interactive))
+            return 130 if summary.interrupted else (1 if summary.error else 0)
+        if not sys.stdin.isatty():
+            parser.print_usage()
+            print('Provide a source when stdin is not an interactive terminal.')
+            return 1
+        while True:
+            interactive_menu()
+            if ask('Process another game? [y/N]: ', 'n').lower() not in ('y', 'yes'):
+                return 0
+    except KeyboardInterrupt:
+        print('\nCancelled.')
+        return 130
+
+
+# Retain the original branding and download-manager discovery.
+
+
 C_CYAN = "\033[96m"
+
 C_GREEN = "\033[92m"
+
 C_YELLOW = "\033[93m"
+
 C_RED = "\033[91m"
+
 C_MAGENTA = "\033[95m"
+
 C_WHITE = "\033[97m"
+
 C_BOLD = "\033[1m"
+
 C_DIM = "\033[2m"
+
 C_RESET = "\033[0m"
-
-# Auto-check and install required dependencies on first launch
-REQUIRED_PACKAGES = {
-    "playwright": "playwright",
-    "playwright_stealth": "playwright-stealth",
-    "bs4": "beautifulsoup4",
-    "requests": "requests",
-}
-
-missing_pkgs = []
-for mod, pkg in REQUIRED_PACKAGES.items():
-    try:
-        __import__(mod)
-    except ImportError:
-        missing_pkgs.append(pkg)
-
-if missing_pkgs:
-    print(f"\n{C_YELLOW}[!] First-time setup: Installing required libraries ({', '.join(missing_pkgs)})...{C_RESET}")
-    try:
-        subprocess.run([sys.executable, "-m", "pip", "install"] + missing_pkgs, check=True)
-        print(f"{C_GREEN}[+] Dependencies successfully installed!{C_RESET}\n")
-    except Exception as e:
-        print(f"{C_RED}[!] Warning: Could not auto-install dependencies: {e}{C_RESET}")
-
-from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
-from bs4 import BeautifulSoup
-
-DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "Downloads")
-
 
 def make_link(text: str, url: str) -> str:
     """Render clickable OSC 8 hyperlink everywhere; modern conhost, Windows Terminal & macOS parse cleanly without wrapping"""
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
-
 LINK_SITE = make_link("Website", "https://chideraokonkwo.com")
+
 LINK_COFFEE = make_link("Buy Me a Coffee", "https://chideraokonkwo.gumroad.com/coffee")
 
 BANNER = f"""
 {C_CYAN}{C_BOLD} =============================================================================
-    ______ _ _    _____ _      _   _______             _           
-   |  ____(_) |  / ____(_)    | | |__   __|           | |          
-   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___  
-   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \\ / _ \\ 
+    ______ _ _    _____ _      _   _______             _
+   |  ____(_) |  / ____(_)    | | |__   __|           | |
+   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___
+   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \\ / _ \\
    | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
-   |_|    |_|\\__|\\_____|_|_|  |_|    |_| \\__,_|_|     |_.__/ \\___/ 
+   |_|    |_|\\__|\\_____|_|_|  |_|    |_| \\__,_|_|     |_.__/ \\___/
 
              {C_YELLOW}>>> BY 0xDENZEL | {LINK_SITE} | {LINK_COFFEE} <<<{C_CYAN}{C_BOLD}
  ============================================================================={C_RESET}
@@ -88,91 +1464,12 @@ BANNER = f"""
   {C_DIM}Supported Hosters & Mirrors:
    [+] FuckingFast (fuckingfast.co) - Instant CDN Direct Links
    [+] FileKeeper (filekeeper.net) - High-Speed Turbo Tunnel Mirrors
-   [+] DataNodes (datanodes.to) - Direct Cloud Storage Mirrors
-   [+] Torrent & Magnet Mirrors (1337x, Magnet URI, .torrent file download)
+   [+] Torrent & Magnet Mirrors (Magnet URI, .torrent file download)
    [+] FitGirl PrivateBin pastes (paste.fitgirl-repacks.site/?id#key)
    [+] FitGirl Repack game pages with interactive mirror selector
    [+] Instant passthrough for already direct links (.dlproxy.uk, /dl/, /d/){C_RESET}
 {C_CYAN}{C_BOLD} ============================================================================={C_RESET}
 """
-
-
-def clear_screen():
-    """Clear terminal screen to keep the header static at the top"""
-    if sys.platform == "win32":
-        os.system("cls")
-    else:
-        os.system("clear")
-
-
-def get_clipboard_text() -> str:
-    """Cross-platform fast clipboard reader (ctypes Win32 on Windows, pbpaste on macOS, xclip on Linux)"""
-    try:
-        if sys.platform == "darwin":
-            cmd = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=2)
-            return cmd.stdout.strip()
-        elif sys.platform == "win32":
-            # 1. Native ctypes Win32 read: 0ms, zero process spawning, no timeouts
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                kernel32 = ctypes.windll.kernel32
-                user32.OpenClipboard.argtypes = [ctypes.c_void_p]
-                user32.OpenClipboard.restype = ctypes.c_bool
-                user32.GetClipboardData.argtypes = [ctypes.c_uint]
-                user32.GetClipboardData.restype = ctypes.c_void_p
-                user32.CloseClipboard.argtypes = []
-                user32.CloseClipboard.restype = ctypes.c_bool
-                kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
-                kernel32.GlobalLock.restype = ctypes.c_void_p
-                kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
-                kernel32.GlobalUnlock.restype = ctypes.c_bool
-
-                if user32.OpenClipboard(None):
-                    try:
-                        h = user32.GetClipboardData(13)  # CF_UNICODETEXT
-                        if h:
-                            ptr = kernel32.GlobalLock(h)
-                            if ptr:
-                                text = ctypes.c_wchar_p(ptr).value
-                                kernel32.GlobalUnlock(h)
-                                if text:
-                                    return text.strip()
-                    finally:
-                        user32.CloseClipboard()
-            except Exception:
-                pass
-
-            # 2. PowerShell fallback
-            try:
-                cmd = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard"],
-                                     capture_output=True, text=True, timeout=5)
-                return cmd.stdout.strip()
-            except Exception:
-                pass
-            return ""
-        else:
-            cmd = subprocess.run(["xclip", "-selection", "clipboard", "-o"], capture_output=True, text=True, timeout=2)
-            return cmd.stdout.strip()
-    except Exception:
-        return ""
-
-
-def copy_to_clipboard(text: str):
-    """Cross-platform clipboard writer (Windows & macOS & Linux)"""
-    try:
-        if sys.platform == "darwin":
-            subprocess.run(["pbcopy"], input=text.strip().encode("utf-8"), check=True)
-            print(f"  {C_GREEN}[+] Copied all direct links to macOS Clipboard!{C_RESET}")
-        elif sys.platform == "win32":
-            subprocess.run(["clip.exe"], input=text.strip().encode("utf-8"), check=True)
-            print(f"  {C_GREEN}[+] Copied all direct links to Windows Clipboard!{C_RESET}")
-        else:
-            subprocess.run(["xclip", "-selection", "clipboard"], input=text.strip().encode("utf-8"), check=True)
-            print(f"  {C_GREEN}[+] Copied all direct links to Clipboard!{C_RESET}")
-    except Exception:
-        pass
-
 
 def get_installed_download_managers() -> list[tuple[str, str, str]]:
     """Detect installed download managers across Windows and macOS.
@@ -230,1004 +1527,6 @@ def get_installed_download_managers() -> list[tuple[str, str, str]]:
 
     return managers
 
-
-def parse_links_from_text(raw_text: str) -> list[str]:
-    """Extract all supported hoster URLs (FuckingFast, FileKeeper, DataNodes) from raw text"""
-    patterns = [
-        r'https?://(?:dl\.)?fuckingfast\.co/[^\s"\'<>]+',
-        r'https?://(?:www\.)?filekeeper\.net/[^\s"\'<>]+',
-        r'https?://(?:www\.)?datanodes\.to/[^\s"\'<>]+',
-    ]
-    seen = set()
-    links = []
-    for pat in patterns:
-        for l in re.findall(pat, raw_text):
-            clean = l.rstrip('.,;*)\'"')
-            if clean not in seen:
-                seen.add(clean)
-                links.append(clean)
-    return links
-
-
-def detect_hoster(url: str) -> str:
-    """Identify which hoster service hosts the given URL"""
-    lower = url.lower()
-    if "filekeeper.net" in lower:
-        return "filekeeper"
-    elif "datanodes.to" in lower:
-        return "datanodes"
-    return "fuckingfast"
-
-
-def is_direct_link(url: str) -> bool:
-    """Check if a URL is already an instant direct CDN download link"""
-    lower = url.lower()
-    if "dl.fuckingfast.co/dl/" in lower:
-        return True
-    if "dlproxy.uk" in lower or ("/download/" in lower and "tunnel" in lower):
-        return True
-    if "/d/" in lower and "datanodes.to" in lower:
-        return True
-    return False
-
-
-def inspect_input(raw_text: str):
-    """Inspect text and find all pastebin links, repack page links, and hoster links"""
-    paste_links = re.findall(r'https?://paste\.fitgirl-repacks\.site/[^\s"\'<>]+', raw_text)
-    repack_links = [u for u in re.findall(r'https?://fitgirl-repacks\.site/[^\s"\'<>]+', raw_text)
-                    if not u.startswith("https://paste.") and not u.startswith("http://paste.")]
-    hoster_links = parse_links_from_text(raw_text)
-    return paste_links, repack_links, hoster_links
-
-
-def detect_game_name(urls: list[str], input_source: str = "") -> str | None:
-    """Detect game name from repack page URL, anchors (#Game_Name_--_...), or URL filename"""
-    if "fitgirl-repacks.site" in input_source and "paste." not in input_source:
-        clean = input_source.strip().rstrip('/')
-        slug = clean.split('/')[-1]
-        if slug and slug != "fitgirl-repacks.site":
-            return slug.replace("-", "_")
-
-    for u in urls:
-        # 1. Anchor format: #Game_Name_--_...
-        if '#' in u:
-            anchor = u.split('#')[-1]
-            m = re.match(r'^([A-Za-z0-9_.\-]+?)(?:_--_|--|\.part\d|\.rar|\.bin)', anchor, re.IGNORECASE)
-            if m:
-                name = m.group(1).rstrip('_.-')
-                if name and not name.lower().startswith("fg-"):
-                    return name
-
-        # 2. Path filename format: /<id>/Game_Name_--_...
-        filename = u.split('/')[-1].split('?')[0].split('#')[0]
-        m_file = re.match(r'^([A-Za-z0-9_.\-]+?)(?:_--_|--|\.part\d|\.rar|\.bin)', filename, re.IGNORECASE)
-        if m_file:
-            name = m_file.group(1).rstrip('_.-')
-            if name and not name.lower().startswith("fg-"):
-                return name
-
-    if os.path.isfile(input_source):
-        base = os.path.splitext(os.path.basename(input_source))[0]
-        if base and base.lower() not in ("urls", "links", "input"):
-            return base
-
-    return None
-
-
-async def extract_links_from_paste(page, paste_url: str) -> list[str]:
-    """Open and decrypt a PrivateBin paste page (paste.fitgirl-repacks.site)"""
-    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Accessing encrypted paste: {C_CYAN}{paste_url}{C_RESET}")
-    print(f"         Decrypting paste securely... ", end="", flush=True)
-    await page.goto(paste_url, wait_until="networkidle", timeout=45000)
-    await asyncio.sleep(2.5)
-
-    body_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
-    links = parse_links_from_text(body_text)
-
-    print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
-    print(f"         Extracted {C_BOLD}{len(links)}{C_RESET} link(s) from paste.")
-    return links
-
-
-async def extract_links_from_fitgirl_page(page, repack_url: str) -> list[str]:
-    """Scrape supported hoster links from a FitGirl repack page"""
-    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Loading FitGirl repack page: {C_CYAN}{repack_url}{C_RESET}")
-    await page.goto(repack_url, wait_until="load", timeout=45000)
-    await asyncio.sleep(2)
-
-    content = await page.content()
-    links = parse_links_from_text(content)
-
-    print(f"         Found {C_BOLD}{len(links)}{C_RESET} link(s) on repack page.")
-    return links
-
-
-def scrape_fitgirl_repack_mirrors(repack_url: str) -> dict | None:
-    """Fast-scrape all Direct Download (FileKeeper, FuckingFast, DataNodes) and Torrent (Magnet, .torrent, 1337x, etc.) mirrors from a FitGirl repack page."""
-    try:
-        req = urllib.request.Request(repack_url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        })
-        html = urllib.request.urlopen(req, timeout=15).read().decode('utf-8', errors='replace')
-        soup = BeautifulSoup(html, 'html.parser')
-
-        # Extract game title
-        game_title = ""
-        h1 = soup.find('h1', class_='entry-title')
-        if h1:
-            game_title = h1.get_text().strip()
-        elif soup.title:
-            game_title = soup.title.get_text().split(' - ')[0].strip()
-
-        # Clean title
-        game_title = re.sub(r'[\–\—\-]\s*v?\d.*$', '', game_title).strip()
-        if not game_title:
-            game_title = "FitGirl_Repack"
-
-        direct_mirrors = []
-        torrent_mirrors = []
-        seen_direct = set()
-        seen_torrent = set()
-
-        for a in soup.find_all('a'):
-            txt = a.get_text().strip()
-            href = a.get('href') or ''
-            lower_txt = txt.lower()
-            lower_href = href.lower()
-
-            # 1. Direct Download Mirrors
-            if 'paste.fitgirl-repacks.site' in lower_href or any(h in lower_href for h in ['fuckingfast.co', 'filekeeper.net', 'datanodes.to']):
-                if '.torrent' not in lower_txt and 'torrent' not in lower_txt:
-                    hoster = None
-                    if 'filekeeper' in lower_txt or 'filekeeper' in lower_href:
-                        hoster = 'FileKeeper'
-                    elif 'fuckingfast' in lower_txt or 'fuckingfast' in lower_href:
-                        hoster = 'FuckingFast'
-                    elif 'datanodes' in lower_txt or 'datanodes' in lower_href:
-                        hoster = 'DataNodes'
-
-                    if hoster and hoster not in seen_direct:
-                        seen_direct.add(hoster)
-                        tag = 'Recommended (Ultra-fast tunnel, ~1.5s/link, 0 countdown)' if hoster == 'FileKeeper' else ('High-Speed Direct CDN (~2.5s/link)' if hoster == 'FuckingFast' else 'Cloud Storage Mirror')
-                        direct_mirrors.append({'name': hoster, 'url': href, 'tag': tag})
-
-            # 2. Torrent Mirrors (Magnet & Direct .torrent file download)
-            if href.startswith('magnet:') and 'Magnet Link' not in seen_torrent:
-                seen_torrent.add('Magnet Link')
-                torrent_mirrors.append({'name': 'Magnet Link', 'type': 'magnet', 'url': href, 'tag': 'Instant 1-click launch in torrent client'})
-            elif '.torrent file' in lower_txt and '.torrent File Download' not in seen_torrent:
-                seen_torrent.add('.torrent File Download')
-                torrent_mirrors.append({'name': '.torrent File Download', 'type': 'torrent_file', 'url': href, 'tag': 'Direct .torrent file download to Downloads'})
-
-        # Sort direct mirrors: FileKeeper first, FuckingFast second, DataNodes third
-        order = {'FileKeeper': 0, 'FuckingFast': 1, 'DataNodes': 2}
-        direct_mirrors.sort(key=lambda m: order.get(m['name'], 99))
-
-        return {
-            'game_title': game_title,
-            'direct_mirrors': direct_mirrors,
-            'torrent_mirrors': torrent_mirrors
-        }
-    except Exception:
-        return None
-
-
-async def download_torrent_attachment(page, paste_url: str, output_dir: str = DOWNLOAD_DIR) -> str | None:
-    """Download .torrent file attachment from a PrivateBin paste and save directly to Downloads"""
-    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Accessing encrypted .torrent paste: {C_CYAN}{paste_url}{C_RESET}")
-    print(f"         Decrypting .torrent attachment... ", end="", flush=True)
-    await page.goto(paste_url, wait_until="networkidle", timeout=45000)
-    await asyncio.sleep(2)
-    print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
-
-    att = page.locator('a:has-text("Download attachment")')
-    if await att.count() > 0:
-        print(f"         Saving .torrent file to Downloads... ", end="", flush=True)
-        async with page.expect_download(timeout=15000) as download_info:
-            await att.first.click()
-        download = await download_info.value
-        filename = download.suggested_filename or "game.torrent"
-        os.makedirs(output_dir, exist_ok=True)
-        save_path = os.path.join(output_dir, filename)
-        await download.save_as(save_path)
-        print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
-        return save_path
-    return None
-
-
-async def handle_repack_mirror_selection(repack_url: str):
-    """Scan repack page for all direct and torrent mirrors and let user select interactively"""
-    print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Inspecting FitGirl repack page: {C_CYAN}{repack_url}{C_RESET}")
-    print(f"         Scanning all available download mirrors... ", end="", flush=True)
-
-    data = scrape_fitgirl_repack_mirrors(repack_url)
-    if not data or (not data['direct_mirrors'] and not data['torrent_mirrors']):
-        print(f"{C_YELLOW}DONE (Direct parse){C_RESET}")
-        await run_pipeline(repack_url)
-        return
-
-    print(f"{C_GREEN}{C_BOLD}DONE{C_RESET}")
-    game_title = data['game_title']
-    direct = data['direct_mirrors']
-    torrent = data['torrent_mirrors']
-
-    print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-    print(f"  {C_WHITE}Repack Detected:{C_RESET} {C_GREEN}{C_BOLD}{game_title}{C_RESET}")
-    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-    options = []
-    idx = 1
-
-    if direct:
-        print(f"\n{C_WHITE}{C_BOLD}--- DIRECT DOWNLOAD HOSTERS (IDM / JDownloader / FDM) ---{C_RESET}")
-        for m in direct:
-            rec_tag = f" {C_YELLOW}[Recommended]{C_RESET}" if m['name'] == 'FileKeeper' else ""
-            print(f"  {C_GREEN}[{idx}]{C_RESET} {C_BOLD}{m['name']:<12}{C_RESET} ➜ {m['tag']}{rec_tag}")
-            options.append(('direct', m))
-            idx += 1
-
-    if torrent:
-        print(f"\n{C_WHITE}{C_BOLD}--- TORRENT & MAGNET MIRRORS (qBittorrent / BitTorrent) ---{C_RESET}")
-        for m in torrent:
-            print(f"  {C_CYAN}[{idx}]{C_RESET} {C_BOLD}{m['name']:<28}{C_RESET} ➜ {m['tag']}")
-            options.append(('torrent', m))
-            idx += 1
-
-    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-    ans = input(f"{C_WHITE}{C_BOLD}>> Select download option [1-{len(options)}, default=1]: {C_RESET}").strip()
-
-    choice_idx = 0
-    if ans.isdigit():
-        val = int(ans)
-        if 1 <= val <= len(options):
-            choice_idx = val - 1
-
-    opt_type, item = options[choice_idx]
-
-    if opt_type == 'direct':
-        print(f"\n{C_GREEN}[+] Selected Direct Hoster:{C_RESET} {C_BOLD}{item['name']}{C_RESET}")
-        target_url = item['url']
-
-        print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-        print(f"{C_BOLD}Filters & Language Preferences{C_RESET}")
-        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-        ans_bonus = input(f"{C_WHITE}{C_BOLD}>> Exclude optional bonus content (soundtracks/trailers)? [Y/N, default=N]: {C_RESET}").strip().lower()
-        exclude_bonus = (ans_bonus == "y")
-
-        print(f"\n{C_BOLD}Language options:{C_RESET}")
-        print(f"  {C_GREEN}[Y]{C_RESET} Keep ENGLISH ONLY (skip other language voiceovers) {C_YELLOW}[Recommended]{C_RESET}")
-        print(f"  {C_WHITE}[N]{C_RESET} Download ALL languages")
-        print(f"  {C_DIM}[Or type a specific language: e.g. spanish, japanese, french]{C_RESET}")
-        ans_lang = input(f"{C_WHITE}{C_BOLD}>> Your language choice [Y/N, default=Y]: {C_RESET}").strip().lower()
-
-        if ans_lang in ("", "y", "yes"):
-            keep_lang = "english"
-        elif ans_lang == "n":
-            keep_lang = None
-        else:
-            keep_lang = ans_lang
-
-        await run_pipeline(target_url, None, exclude_bonus, keep_lang)
-
-    elif opt_type == 'torrent':
-        sub_type = item.get('type')
-        if sub_type == 'magnet':
-            mag_url = item['url']
-            print(f"\n{C_GREEN}[+] Magnet Link Extracted:{C_RESET}")
-            print(f"    {C_CYAN}{mag_url[:120]}...{C_RESET}")
-            copy_to_clipboard(mag_url)
-            ans = input(f"\n{C_WHITE}{C_BOLD}>> Open in default torrent client (qBittorrent / BitTorrent)? [Y/N, default=Y]: {C_RESET}").strip().lower()
-            if ans in ("", "y", "yes"):
-                try:
-                    if sys.platform == "win32":
-                        subprocess.Popen(["start", "", mag_url], shell=True)
-                    elif sys.platform == "darwin":
-                        subprocess.Popen(["open", mag_url])
-                    print(f"{C_GREEN}[+] Torrent client launched!{C_RESET}")
-                except Exception as e:
-                    print(f"{C_RED}[!] Could not launch torrent client: {e}{C_RESET}")
-
-        elif sub_type == 'torrent_file':
-            paste_url = item['url']
-            print(f"\n{C_GREEN}[+] Downloading .torrent file from encrypted paste...{C_RESET}")
-            async with async_playwright() as p:
-                launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
-                try:
-                    browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
-                except Exception:
-                    browser = await p.chromium.launch(headless=True, args=launch_args)
-                page = await browser.new_page()
-                await Stealth().apply_stealth_async(page)
-                saved_path = await download_torrent_attachment(page, paste_url, DOWNLOAD_DIR)
-                await browser.close()
-
-            if saved_path and os.path.isfile(saved_path):
-                print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-                print(f"  {C_GREEN}{C_BOLD}SUCCESS: .torrent file saved!{C_RESET}")
-                print(f"  File: {C_GREEN}{C_BOLD}{os.path.basename(saved_path)}{C_RESET}")
-                print(f"  Saved to: {C_CYAN}{saved_path}{C_RESET}")
-                copy_to_clipboard(saved_path)
-                print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-                try:
-                    if sys.platform == "win32":
-                        subprocess.run(["explorer.exe", f"/select,{saved_path}"], check=False)
-                    elif sys.platform == "darwin":
-                        subprocess.run(["open", "-R", saved_path], check=False)
-                except Exception:
-                    pass
-
-                ans = input(f"\n{C_WHITE}{C_BOLD}>> Open .torrent file in torrent client now? [Y/N, default=Y]: {C_RESET}").strip().lower()
-                if ans in ("", "y", "yes"):
-                    try:
-                        if sys.platform == "win32":
-                            os.startfile(saved_path)
-                        elif sys.platform == "darwin":
-                            subprocess.Popen(["open", saved_path])
-                        print(f"{C_GREEN}[+] Opened .torrent file in torrent client!{C_RESET}")
-                    except Exception as e:
-                        print(f"{C_RED}[!] Could not open torrent file: {e}{C_RESET}")
-            else:
-                print(f"{C_RED}[!] Could not download .torrent file from paste.{C_RESET}")
-
-
-async def extract_fuckingfast(page, url: str, retries: int = 3) -> str | None:
-    """Extract FuckingFast direct download link handling Cloudflare Turnstile, HTMX & popunders."""
-    clean_url = url.split('#')[0].strip()
-    if not clean_url:
-        return None
-
-    for attempt in range(1, retries + 1):
-        found_link = None
-
-        def handle_download(d):
-            nonlocal found_link
-            found_link = d.url
-
-        def handle_popup(p):
-            asyncio.create_task(p.close())
-
-        async def on_response(response):
-            nonlocal found_link
-            u = response.url
-            if "/dl/" in u:
-                found_link = u
-            loc = response.headers.get("hx-redirect") or response.headers.get("location")
-            if loc and "/dl/" in loc:
-                found_link = loc
-
-        page.on("download", handle_download)
-        page.on("popup", handle_popup)
-        page.on("response", on_response)
-
-        try:
-            await page.goto(clean_url, wait_until="domcontentloaded", timeout=25000)
-
-            # Check if file was removed or deleted by hoster
-            page_text = await page.content()
-            if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
-                return "REMOVED"
-
-            # Allow DOM scripts to settle
-            for _ in range(10):
-                if await page.locator('a:has-text("DOWNLOAD")').count() > 0:
-                    break
-                await asyncio.sleep(0.4)
-
-            btn = page.locator('a:has-text("DOWNLOAD")')
-            if await btn.count() > 0:
-                await btn.first.click()
-                await asyncio.sleep(0.6)
-                await btn.first.click()
-
-                for _ in range(30):
-                    if found_link:
-                        break
-                    await asyncio.sleep(0.15)
-
-            if found_link:
-                return found_link
-        except Exception:
-            pass
-        finally:
-            page.remove_listener("download", handle_download)
-            page.remove_listener("popup", handle_popup)
-            page.remove_listener("response", on_response)
-
-        await asyncio.sleep(random.uniform(0.6, 1.2))
-
-    return None
-
-
-async def extract_filekeeper(page, url: str, retries: int = 3) -> str | None:
-    """Extract FileKeeper direct download link via instant high-speed form resolution."""
-    clean_url = url.split('#')[0].strip()
-    if not clean_url:
-        return None
-
-    for attempt in range(1, retries + 1):
-        found_link = None
-
-        def handle_download(d):
-            nonlocal found_link
-            found_link = d.url
-
-        def handle_popup(p):
-            asyncio.create_task(p.close())
-
-        async def on_response(response):
-            nonlocal found_link
-            u = response.url
-            if "dlproxy.uk" in u or "tunnel" in u or ("/download/" in u and "filekeeper.net" not in u):
-                found_link = u
-            loc = response.headers.get("location")
-            if loc and ("dlproxy.uk" in loc or "tunnel" in loc or ("/download/" in loc and "filekeeper.net" not in loc)):
-                found_link = loc
-
-        page.on("download", handle_download)
-        page.on("popup", handle_popup)
-        page.on("response", on_response)
-
-        try:
-            await page.goto(clean_url, wait_until="domcontentloaded", timeout=25000)
-
-            # Check if file was removed
-            page_text = await page.content()
-            if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
-                return "REMOVED"
-
-            # Parse file code from URL: https://filekeeper.net/<code-id>/<filename>
-            parts = clean_url.replace("https://", "").replace("http://", "").split('/')
-            code = parts[1] if len(parts) >= 2 else ""
-
-            # Direct form submit bypassing countdown and advertising popups
-            await page.evaluate(f"""() => {{
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'https://filekeeper.net/download';
-                const fields = {{
-                    'op': 'download2',
-                    'id': '{code}',
-                    'rand': '',
-                    'referer': '',
-                    'method_free': 'Free download',
-                    'down_direct': '1'
-                }};
-                for (const [k, v] of Object.entries(fields)) {{
-                    const inp = document.createElement('input');
-                    inp.type = 'hidden';
-                    inp.name = k;
-                    inp.value = v;
-                    form.appendChild(inp);
-                }}
-                document.body.appendChild(form);
-                form.submit();
-            }}""")
-
-            for _ in range(35):
-                if found_link:
-                    break
-                await asyncio.sleep(0.15)
-
-            if found_link:
-                return found_link
-        except Exception:
-            pass
-        finally:
-            page.remove_listener("download", handle_download)
-            page.remove_listener("popup", handle_popup)
-            page.remove_listener("response", on_response)
-
-        await asyncio.sleep(random.uniform(0.5, 1.0))
-
-    return None
-
-
-async def extract_datanodes(page, url: str, retries: int = 2) -> str | None:
-    """Extract DataNodes direct download link via progression and verification."""
-    clean_url = url.split('#')[0].strip()
-    if not clean_url:
-        return None
-
-    for attempt in range(1, retries + 1):
-        found_link = None
-
-        def handle_download(d):
-            nonlocal found_link
-            found_link = d.url
-
-        def handle_popup(p):
-            asyncio.create_task(p.close())
-
-        async def on_response(response):
-            nonlocal found_link
-            u = response.url
-            if "/d/" in u and "datanodes.to" in u:
-                found_link = u
-            loc = response.headers.get("location")
-            if loc and "/d/" in loc:
-                found_link = loc
-
-        page.on("download", handle_download)
-        page.on("popup", handle_popup)
-        page.on("response", on_response)
-
-        try:
-            await page.goto(clean_url, wait_until="domcontentloaded", timeout=30000)
-
-            # Check if file was removed
-            page_text = await page.content()
-            if any(term in page_text for term in ("File Not Found", "File has been removed", "404 Not Found", "File does not exist")):
-                return "REMOVED"
-
-            # Step 1: Wait up to 8s for #method_free button to become enabled
-            for _ in range(16):
-                btn_state = await page.evaluate("""() => {
-                    const b = document.getElementById('method_free');
-                    return b && !b.disabled;
-                }""")
-                if btn_state:
-                    break
-                await asyncio.sleep(0.5)
-
-            # Submit form to navigate to Step 2
-            try:
-                async with page.expect_navigation(timeout=15000):
-                    await page.evaluate("""() => {
-                        const btn = document.getElementById('method_free');
-                        if (btn) {
-                            btn.removeAttribute('disabled');
-                            btn.click();
-                        }
-                    }""")
-            except Exception:
-                pass
-
-            await asyncio.sleep(3)
-
-            # Step 2: Interact with verification if present
-            loc = page.locator('.cf-turnstile')
-            if await loc.count() > 0:
-                box = await loc.bounding_box()
-                if box:
-                    await page.mouse.click(box['x'] + 30, box['y'] + 30)
-                    await asyncio.sleep(3)
-
-            # Check if download button or direct link is ready
-            btn_dl = page.locator('button:has-text("Download"), button:has-text("Start Download")')
-            if await btn_dl.count() > 0:
-                await btn_dl.first.click()
-                for _ in range(30):
-                    if found_link:
-                        break
-                    await asyncio.sleep(0.2)
-
-            if found_link:
-                return found_link
-        except Exception:
-            pass
-        finally:
-            page.remove_listener("download", handle_download)
-            page.remove_listener("popup", handle_popup)
-            page.remove_listener("response", on_response)
-
-        await asyncio.sleep(random.uniform(0.6, 1.2))
-
-    return None
-
-
-async def extract_direct_download(page, url: str) -> str | None:
-    """Master direct download dispatcher routing each URL to its dedicated resolver engine"""
-    hoster = detect_hoster(url)
-    if hoster == "filekeeper":
-        return await extract_filekeeper(page, url)
-    elif hoster == "datanodes":
-        return await extract_datanodes(page, url)
-    else:
-        return await extract_fuckingfast(page, url)
-
-
-async def run_pipeline(input_source: str, output_path: str | None = None, exclude_bonus: bool = False, keep_lang: str | None = "english"):
-    clean_input = input_source.strip().strip('"').strip("'")
-    raw_urls = []
-
-    if os.path.isfile(clean_input):
-        print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Reading links from local file: {C_CYAN}{clean_input}{C_RESET}")
-        with open(clean_input, "r", encoding="utf-8") as f:
-            content = f.read()
-        paste_links, repack_links, hoster_links = inspect_input(content)
-    else:
-        paste_links, repack_links, hoster_links = inspect_input(clean_input)
-
-    # 1. Resolve pastebin or repack links
-    if paste_links or repack_links:
-        async with async_playwright() as p:
-            launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
-            try:
-                browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
-            except Exception:
-                browser = await p.chromium.launch(headless=True, args=launch_args)
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
-            await Stealth().apply_stealth_async(page)
-
-            for p_url in paste_links:
-                p_extracted = await extract_links_from_paste(page, p_url)
-                raw_urls.extend(p_extracted)
-
-            for r_url in repack_links:
-                r_extracted = await extract_links_from_fitgirl_page(page, r_url)
-                raw_urls.extend(r_extracted)
-
-            await browser.close()
-
-    if hoster_links:
-        if not paste_links and not repack_links:
-            ff_cnt = sum(1 for u in hoster_links if "fuckingfast" in u)
-            fk_cnt = sum(1 for u in hoster_links if "filekeeper" in u)
-            dn_cnt = sum(1 for u in hoster_links if "datanodes" in u)
-            bd = []
-            if ff_cnt: bd.append(f"{ff_cnt} FuckingFast")
-            if fk_cnt: bd.append(f"{fk_cnt} FileKeeper")
-            if dn_cnt: bd.append(f"{dn_cnt} DataNodes")
-            h_str = ", ".join(bd) if bd else f"{len(hoster_links)} link(s)"
-            print(f"\n{C_MAGENTA}{C_BOLD}[Step 1]{C_RESET} Found {C_BOLD}{len(hoster_links)}{C_RESET} link(s) directly from input ({h_str}).")
-        raw_urls.extend(hoster_links)
-
-    # Deduplicate
-    seen = set()
-    deduped_urls = []
-    for u in raw_urls:
-        if u not in seen:
-            seen.add(u)
-            deduped_urls.append(u)
-    raw_urls = deduped_urls
-
-    if not raw_urls:
-        print(f"\n{C_RED}[-] No valid download links (FuckingFast, FileKeeper, DataNodes) found to process.{C_RESET}")
-        return
-
-    # 2. Check if all links are direct
-    direct_links_only = [u for u in raw_urls if is_direct_link(u)]
-    if len(direct_links_only) == len(raw_urls):
-        print("\n" + f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-        print(f"  {C_YELLOW}{C_BOLD}[+] NOTICE: All links provided are ALREADY direct download links!{C_RESET}")
-        print(f"      {C_DIM}Direct CDN links detected. Skipping validation pipeline.{C_RESET}")
-        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-        game_name = detect_game_name(raw_urls, clean_input)
-        if not game_name:
-            prompt_name = input(f"{C_WHITE}{C_BOLD}>> Enter game name for file (e.g. witcher3) [default: direct_links]: {C_RESET}").strip()
-            game_name = prompt_name.replace(" ", "_") if prompt_name else "direct_links"
-
-        if not output_path:
-            output_path = os.path.join(DOWNLOAD_DIR, f"{game_name}_links.txt")
-
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            for link in raw_urls:
-                f.write(link.split('#')[0].strip() + "\n")
-
-        print(f"\n  {C_GREEN}{C_BOLD}SUCCESS: {len(raw_urls)} direct links saved instantly!{C_RESET}")
-        print(f"  Game: {C_GREEN}{C_BOLD}{game_name}{C_RESET}")
-        print(f"  Saved to file: {C_CYAN}{output_path}{C_RESET}")
-        copy_to_clipboard("\n".join([u.split('#')[0].strip() for u in raw_urls]))
-        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-        # Reveal file in OS file manager immediately!
-        try:
-            if sys.platform == "win32":
-                subprocess.run(["explorer.exe", f"/select,{output_path}"], check=False)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", "-R", output_path], check=False)
-        except Exception:
-            pass
-
-        dms = get_installed_download_managers()
-        if dms:
-            dm_name, dm_target, dm_type = dms[0]
-            print(f"\n{C_GREEN}[+] {dm_name} detected!{C_RESET}")
-            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch {dm_name} now? [Y/N, default=Y]: {C_RESET}").strip().lower()
-            if ans in ("", "y", "yes"):
-                try:
-                    if dm_type == "mac_open":
-                        subprocess.Popen(["open", dm_target])
-                    else:
-                        subprocess.Popen([dm_target])
-                    print(f"{C_GREEN}[+] {dm_name} launched!{C_RESET}")
-                except Exception as e:
-                    print(f"{C_RED}[!] Could not launch {dm_name}: {e}{C_RESET}")
-        return
-
-    # 3. Detect game name
-    game_name = detect_game_name(raw_urls, clean_input)
-    if not game_name:
-        prompt_name = input(f"\n{C_WHITE}{C_BOLD}>> Enter game name for file (e.g. witcher3) [default: fitgirl_links]: {C_RESET}").strip()
-        game_name = prompt_name.replace(" ", "_") if prompt_name else f"fitgirl_links_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    if not output_path:
-        output_path = os.path.join(DOWNLOAD_DIR, f"{game_name}_links.txt")
-
-    # 4. Filters
-    filtered_urls = []
-    for url in raw_urls:
-        lower = url.lower()
-        if exclude_bonus and "fg-optional" in lower:
-            continue
-
-        if "fg-selective" in lower:
-            if keep_lang:
-                if keep_lang.lower() in lower:
-                    filtered_urls.append(url)
-                continue
-            else:
-                filtered_urls.append(url)
-                continue
-
-        filtered_urls.append(url)
-
-    if len(filtered_urls) < len(raw_urls):
-        diff = len(raw_urls) - len(filtered_urls)
-        lang_note = f" (kept '{keep_lang}' audio only)" if keep_lang else ""
-        print(f"         {C_YELLOW}Filter applied: excluded {diff} optional/foreign files{lang_note}.{C_RESET}")
-        print(f"         {C_BOLD}{len(filtered_urls)}{C_RESET} file(s) queued for download.")
-
-    # 5. Resolve links
-    print(f"\n{C_MAGENTA}{C_BOLD}[Step 2]{C_RESET} Resolving {C_BOLD}{len(filtered_urls)}{C_RESET} direct download links for '{C_GREEN}{C_BOLD}{game_name}{C_RESET}'...")
-    print(f"         {C_DIM}(High-speed direct CDN extraction session - press Ctrl+C anytime to stop & save){C_RESET}")
-
-    results = []
-    total = len(filtered_urls)
-    interrupted = False
-
-    try:
-        async with async_playwright() as p:
-            launch_args = ['--disable-blink-features=AutomationControlled', '--no-sandbox']
-            try:
-                browser = await p.chromium.launch(headless=True, channel="chrome", args=launch_args)
-            except Exception:
-                browser = await p.chromium.launch(headless=True, args=launch_args)
-
-            if sys.platform == "darwin":
-                ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            else:
-                ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
-            context = await browser.new_context(
-                user_agent=ua,
-                locale="en-US",
-                timezone_id="America/New_York",
-                viewport={"width": 1920, "height": 1080},
-            )
-            page = await context.new_page()
-            # Auto-suppress any popup ad tab across the context
-            context.on("page", lambda p: asyncio.create_task(p.close()) if p != page else None)
-            await Stealth().apply_stealth_async(page)
-
-            for i, url in enumerate(filtered_urls, 1):
-                if '#' in url:
-                    name_hint = url.split('#')[-1]
-                elif '/' in url:
-                    name_hint = url.split('/')[-1]
-                else:
-                    name_hint = f"Part {i}"
-
-                pct = int((i - 1) / total * 100)
-                bar_len = 14
-                filled = int(bar_len * (i - 1) / total)
-                bar = "█" * filled + "░" * (bar_len - filled)
-
-                if is_direct_link(url):
-                    pct_done = int(i / total * 100)
-                    bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
-                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_YELLOW}(Direct) OK!{C_RESET}     ")
-                    sys.stdout.flush()
-                    results.append(url.split('#')[0].strip())
-                    continue
-
-                # Inline display with ASCII redirect icon while resolving
-                sys.stdout.write(f"\r  [{i}/{total}] {pct:3d}% |{bar}| {name_hint[:32]} ➜ {C_CYAN}Resolving...{C_RESET}     ")
-                sys.stdout.flush()
-
-                direct = await extract_direct_download(page, url)
-                pct_done = int(i / total * 100)
-                bar_done = "█" * int(bar_len * i / total) + "░" * (bar_len - int(bar_len * i / total))
-                if direct == "REMOVED":
-                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}[REMOVED/404]{C_RESET}     ")
-                elif direct:
-                    results.append(direct)
-                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_GREEN}{C_BOLD}OK!{C_RESET}     ")
-                else:
-                    sys.stdout.write(f"\r  [{i}/{total}] {pct_done:3d}% |{bar_done}| {name_hint[:32]} ➜ {C_RED}{C_BOLD}FAILED{C_RESET}     ")
-                sys.stdout.flush()
-                await asyncio.sleep(random.uniform(0.6, 1.2))
-
-            sys.stdout.write("\n")
-            await browser.close()
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        interrupted = True
-        sys.stdout.write("\n")
-        print(f"\n{C_YELLOW}{C_BOLD}[!] Cancellation requested by user (Ctrl+C).{C_RESET}")
-
-    # 6. Finalize output
-    if interrupted:
-        print(f"\n{C_MAGENTA}{C_BOLD}[Step 3]{C_RESET} Preserving partially resolved links...")
-    else:
-        print(f"\n{C_MAGENTA}{C_BOLD}[Step 3]{C_RESET} Finalizing results...")
-
-    if results:
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            for link in results:
-                f.write(link + "\n")
-
-        print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-        if interrupted:
-            print(f"  {C_YELLOW}{C_BOLD}PARTIALLY SAVED: {len(results)}/{len(filtered_urls)} direct links preserved!{C_RESET}")
-        else:
-            print(f"  {C_GREEN}{C_BOLD}SUCCESS: {len(results)}/{len(filtered_urls)} direct links resolved!{C_RESET}")
-        print(f"  Game: {C_GREEN}{C_BOLD}{game_name}{C_RESET}")
-        print(f"  Saved to file: {C_CYAN}{output_path}{C_RESET}")
-        copy_to_clipboard("\n".join(results))
-        print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-        # Reveal file in OS file manager immediately!
-        try:
-            if sys.platform == "win32":
-                subprocess.run(["explorer.exe", f"/select,{output_path}"], check=False)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", "-R", output_path], check=False)
-        except Exception:
-            pass
-
-        dms = get_installed_download_managers()
-        if dms:
-            dm_name, dm_target, dm_type = dms[0]
-            print(f"\n{C_GREEN}[+] {dm_name} detected!{C_RESET}")
-            ans = input(f"{C_WHITE}{C_BOLD}>> Would you like to launch {dm_name} now? [Y/N, default=Y]: {C_RESET}").strip().lower()
-            if ans in ("", "y", "yes"):
-                try:
-                    if dm_type == "mac_open":
-                        subprocess.Popen(["open", dm_target])
-                    else:
-                        subprocess.Popen([dm_target])
-                    print(f"{C_GREEN}[+] {dm_name} launched!{C_RESET}")
-                except Exception as e:
-                    print(f"{C_RED}[!] Could not launch {dm_name}: {e}{C_RESET}")
-        else:
-            print(f"\n{C_WHITE}In IDM / JDownloader / FDM:{C_RESET} Import from text file or paste from clipboard:\n  {C_CYAN}{output_path}{C_RESET}")
-    else:
-        print(f"\n{C_RED}[-] No links could be resolved.{C_RESET}")
-
-
-def interactive_menu():
-    clear_screen()
-    print(BANNER)
-
-    clip_text = get_clipboard_text()
-    p_links, r_links, h_links = inspect_input(clip_text)
-    src = ""
-
-    if p_links or r_links or h_links:
-        if r_links and not p_links and not h_links:
-            print(f"{C_GREEN}[+] Clipboard auto-detect: Found FitGirl Repack Page in your Clipboard!{C_RESET}")
-            print(f"    {C_CYAN}{r_links[0]}{C_RESET}")
-            ans = input(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to inspect mirrors & choose download, or type [P] to paste manually: {C_RESET}").strip().lower()
-            if ans in ("", "y", "yes"):
-                asyncio.run(handle_repack_mirror_selection(r_links[0]))
-                return
-        else:
-            desc_parts = []
-            if p_links:
-                desc_parts.append(f"{len(p_links)} FitGirl Pastebin URL(s)")
-            if r_links:
-                desc_parts.append(f"{len(r_links)} FitGirl Repack Page(s)")
-            if h_links:
-                ff_c = sum(1 for u in h_links if "fuckingfast" in u)
-                fk_c = sum(1 for u in h_links if "filekeeper" in u)
-                dn_c = sum(1 for u in h_links if "datanodes" in u)
-                h_details = []
-                if ff_c: h_details.append(f"{ff_c} FuckingFast")
-                if fk_c: h_details.append(f"{fk_c} FileKeeper")
-                if dn_c: h_details.append(f"{dn_c} DataNodes")
-                desc_parts.append(f"{len(h_links)} link(s) [{', '.join(h_details)}]")
-
-            desc = " and ".join(desc_parts)
-            print(f"{C_GREEN}[+] Clipboard auto-detect: Found {C_BOLD}{desc}{C_RESET}{C_GREEN} in your Clipboard!{C_RESET}")
-            ans = input(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to use your clipboard, or type [P] to paste manually: {C_RESET}").strip().lower()
-            if ans in ("", "y", "yes"):
-                src = clip_text
-
-    if not src:
-        print(f"\n{C_WHITE}{C_BOLD}>> Paste your URL, file path, or batch links below:{C_RESET}")
-        print(f"   {C_DIM}(Supports multi-line paste with/without bullets; press Enter when done):{C_RESET}")
-        lines = []
-        while True:
-            try:
-                line = input()
-                if not line.strip():
-                    if lines:
-                        break
-                    continue
-                lines.append(line)
-                if len(lines) == 1 and ("paste.fitgirl-repacks.site" in line or "fitgirl-repacks.site" in line or os.path.isfile(line.strip().strip('"'))):
-                    break
-            except EOFError:
-                break
-        src = "\n".join(lines)
-
-    if not src.strip():
-        print(f"{C_RED}[!] No input provided.{C_RESET}")
-        return
-
-    p_check, r_check, h_check = inspect_input(src)
-    if r_check and not p_check and not h_check:
-        asyncio.run(handle_repack_mirror_selection(r_check[0]))
-        return
-
-    if h_check and not p_check and not r_check:
-        direct_check = [u for u in h_check if is_direct_link(u)]
-        if len(direct_check) == len(h_check):
-            asyncio.run(run_pipeline(src, None, False, None))
-            return
-
-    print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-    print(f"{C_BOLD}Filters & Language Preferences{C_RESET}")
-    print(f"{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-
-    ans_bonus = input(f"{C_WHITE}{C_BOLD}>> Exclude optional bonus content (soundtracks/trailers)? [Y/N, default=N]: {C_RESET}").strip().lower()
-    exclude_bonus = (ans_bonus == "y")
-
-    print(f"\n{C_BOLD}Language options:{C_RESET}")
-    print(f"  {C_GREEN}[Y]{C_RESET} Keep ENGLISH ONLY (skip other language voiceovers) {C_YELLOW}[Recommended]{C_RESET}")
-    print(f"  {C_WHITE}[N]{C_RESET} Download ALL languages")
-    print(f"  {C_DIM}[Or type a specific language: e.g. spanish, japanese, french]{C_RESET}")
-    ans_lang = input(f"{C_WHITE}{C_BOLD}>> Your language choice [Y/N, default=Y]: {C_RESET}").strip().lower()
-
-    if ans_lang in ("", "y", "yes"):
-        keep_lang = "english"
-    elif ans_lang == "n":
-        keep_lang = None
-    else:
-        keep_lang = ans_lang
-
-    asyncio.run(run_pipeline(src, None, exclude_bonus, keep_lang))
-
-
-def main():
-    parser = argparse.ArgumentParser(description="FitGirl Turbo Link Extractor - Direct download resolver for FuckingFast, FileKeeper & DataNodes")
-    parser.add_argument("source", nargs="?", help="Pastebin URL, FitGirl page URL, text file path, or link")
-    parser.add_argument("-o", "--output", default=None, help="Output file (default: <Game_Name>_links.txt in Downloads)")
-    parser.add_argument("--no-bonus", action="store_true", help="Exclude bonus files (fg-optional*)")
-    parser.add_argument("--lang", default="english", help="Keep ONLY this selective language (default: english, or 'all')")
-    args = parser.parse_args()
-
-    try:
-        if not args.source:
-            while True:
-                interactive_menu()
-                print(f"\n{C_CYAN}{C_BOLD}================================================================={C_RESET}")
-                print(f"{C_WHITE}{C_BOLD}>> What would you like to do next?{C_RESET}")
-                print(f"   {C_GREEN}[1]{C_RESET} Process another game / paste new links {C_YELLOW}(Start afresh){C_RESET}")
-                print(f"   {C_RED}[2]{C_RESET} Exit")
-                choice = input(f"{C_WHITE}{C_BOLD}>> Choice [1/2, default=2]: {C_RESET}").strip().lower()
-                if choice not in ("1", "again", "y", "yes", "afresh"):
-                    print(f"\n{C_GREEN}All done! Happy downloading.{C_RESET}\n")
-                    break
-                print("\n" * 2)
-        else:
-            p_check, r_check, h_check = inspect_input(args.source)
-            if r_check and not p_check and not h_check:
-                asyncio.run(handle_repack_mirror_selection(r_check[0]))
-                return
-            keep_lang = None if args.lang.lower() in ("all", "none") else args.lang
-            asyncio.run(run_pipeline(args.source, args.output, args.no_bonus, keep_lang))
-    except KeyboardInterrupt:
-        print(f"\n\n{C_YELLOW}[!] Session stopped cleanly.{C_RESET}\n")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
+    # Keep handled cancellation out of the immutable batch wrapper's Python-error branch.
     main()
