@@ -51,11 +51,6 @@ python -x Download_FitGirl_Links.bat "links.txt" --lang english --no-bonus -o "g
 
 Use `python3` on macOS. Run with `--help` for more options.
 
-## Contributors
-
-**0xDENZEL** — creator and maintainer.
-
-Development assistance: **Gemini** and **ChatGPT**.
 
 ## License
 
