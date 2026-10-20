@@ -1285,7 +1285,7 @@ async def process_batch(urls, alternatives, session, sink, progress):
     blocked = {}
     for index, url in enumerate(urls):
         title = filename_hint(url) or f'Part {index+1}'
-        progress.update(index, title, f"{C_CYAN}➜ Resolving...{C_RESET}")
+        progress.update(index, title, '> resolving')
         host = detect_hoster(url)
         if host == 'datanodes' and not is_direct_link(url):
             result = Resolution('alternative_required')
@@ -1297,7 +1297,7 @@ async def process_batch(urls, alternatives, session, sink, progress):
             for alternative in alternatives.get(url_identity(url), []):
                 alt_host = detect_hoster(alternative)
                 if alt_host in blocked: continue
-                progress.update(index, title, f"{C_YELLOW}➜ {HOST_NAMES.get(alt_host, 'fallback')}...{C_RESET}")
+                progress.update(index, title, '> ' + HOST_NAMES.get(alt_host, 'fallback'))
                 result = await resolve_url(session, alternative, on_success=sink.add)
                 if result.status == 'verification_required': blocked[alt_host] = result.status
                 if result.status == 'success': break
@@ -1305,13 +1305,8 @@ async def process_batch(urls, alternatives, session, sink, progress):
             sink.add(result.url)
             summary.resolved = len(sink.links)
         summary.statuses[result.status] = summary.statuses.get(result.status, 0) + 1
-        label = {
-            'success': f"{C_GREEN}{C_BOLD}➜ OK!{C_RESET}",
-            'removed': f"{C_RED}{C_BOLD}➜ [REMOVED/404]{C_RESET}",
-            'verification_required': f"{C_YELLOW}{C_BOLD}➜ [VERIFY]{C_RESET}",
-            'rate_limited': f"{C_YELLOW}{C_BOLD}➜ [LIMITED]{C_RESET}",
-            'alternative_required': f"{C_YELLOW}{C_BOLD}➜ [ALTERNATE]{C_RESET}"
-        }.get(result.status, f"{C_RED}{C_BOLD}➜ FAILED{C_RESET}")
+        label = {'success': '+ OK', 'removed': 'x removed', 'verification_required': '! verify',
+                 'rate_limited': '! limited', 'alternative_required': '! use alternate'}.get(result.status, 'x failed')
         progress.update(index+1, title, label)
     return summary
 
@@ -1444,11 +1439,23 @@ def interactive_menu():
     clipboard = get_clipboard_text()
     source = ''
     try:
-        found = any(inspect_input(clipboard))
+        p_links, r_links, h_links = inspect_input(clipboard)
+        found = bool(p_links or r_links or h_links)
     except ExtractionError:
+        p_links, r_links, h_links = [], [], []
         found = False
     if found:
-        print(f"{C_GREEN}[+] Clipboard auto-detect: Supported links found in your Clipboard!{C_RESET}")
+        if r_links and not p_links and not h_links:
+            print(f"{C_GREEN}[+] Clipboard auto-detect: Repack page link found in clipboard:{C_RESET}")
+            print(f"    {C_CYAN}{r_links[0]}{C_RESET}")
+        elif p_links and not r_links and not h_links:
+            print(f"{C_GREEN}[+] Clipboard auto-detect: Found {len(p_links)} paste link(s) in clipboard:{C_RESET}")
+            print(f"    {C_CYAN}{p_links[0]}{C_RESET}")
+        elif h_links and not p_links and not r_links:
+            print(f"{C_GREEN}[+] Clipboard auto-detect: Found {len(h_links)} hoster link(s) in clipboard.{C_RESET}")
+        else:
+            total_cnt = len(p_links) + len(r_links) + len(h_links)
+            print(f"{C_GREEN}[+] Clipboard auto-detect: Found {total_cnt} supported link(s) in clipboard.{C_RESET}")
         ans = ask(f"{C_WHITE}{C_BOLD}>> Press [ENTER] to use clipboard, or type [P] to paste manually: {C_RESET}", 'enter')
         if ans.lower() not in ('p', 'paste'):
             source = clipboard
