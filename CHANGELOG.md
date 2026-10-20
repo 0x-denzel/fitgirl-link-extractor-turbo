@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.3.2] - 2026-10-20
+### Fixed
+- **Playwright Route Handler Error**: Wrapped `route.continue_()` and `route.abort()` in `try...except` exception guards, resolving `Route.continue_: Route is already handled!` crashes when pages redirect.
+- **File Explorer Reveal Delimiter Bug**: Sanitized commas (`,`) from game titles and file paths, preventing `explorer.exe /select,` from breaking on commas and opening Desktop instead of Downloads.
+- **Restored Terminal UI Colors**: Restored ANSI VT100 colors across interactive prompts, menus, mirror selection, and completion summaries.
+- **Enhanced Progress Display**: Modern single-line progress bar with `|████░░░░|` block graphics, colored status icons (`➜ OK!`, `➜ Resolving...`, `➜ FAILED`), and exact width budgeting to prevent wrapping on 80-column consoles.
+- **Duplicate Torrent Mirror Elimination**: Deduplicated Magnet links and `.torrent` attachments in the repack mirror selector.
+
 ## [v1.3.1] - 2026-10-20
 - FileKeeper and FuckingFast are the supported download hosts.
 - Improved reliability, progress display, and cancellation handling.
