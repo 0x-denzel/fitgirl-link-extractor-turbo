@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file.
 - **Torrent & Magnet Integration**:
   - **Magnet Link**: One-click extraction, automatic clipboard copy, and optional auto-launch in default torrent client (qBittorrent / BitTorrent).
   - **.torrent File Attachment Downloader**: Silently decrypts PrivateBin `.torrent` file attachments in the background, downloads the `.torrent` file into `~/Downloads/`, highlights in Windows Explorer / macOS Finder, and prompts to launch in torrent client.
-  - **Tracker Pages (1337x / Tapochek / RuTor)**: Direct 1-click clipboard copy and browser launcher.
+  - **Streamlined Torrent Sources**: Focused directly on high-speed Magnet URI launching and `.torrent` file downloads, removing redundant ad-heavy tracker web pages.
 - **Graceful Cancellation & Progress Preservation**: Intercepts `Ctrl+C` interrupt cleanly without crashing, instantly saving whatever links were already resolved to file, copying them to clipboard, and highlighting in File Explorer.
 
 ## [v1.1.0] - 2026-10-20

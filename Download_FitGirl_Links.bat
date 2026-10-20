@@ -391,22 +391,13 @@ def scrape_fitgirl_repack_mirrors(repack_url: str) -> dict | None:
                         tag = 'Recommended (Ultra-fast tunnel, ~1.5s/link, 0 countdown)' if hoster == 'FileKeeper' else ('High-Speed Direct CDN (~2.5s/link)' if hoster == 'FuckingFast' else 'Cloud Storage Mirror')
                         direct_mirrors.append({'name': hoster, 'url': href, 'tag': tag})
 
-            # 2. Torrent Mirrors
+            # 2. Torrent Mirrors (Magnet & Direct .torrent file download)
             if href.startswith('magnet:') and 'Magnet Link' not in seen_torrent:
                 seen_torrent.add('Magnet Link')
                 torrent_mirrors.append({'name': 'Magnet Link', 'type': 'magnet', 'url': href, 'tag': 'Instant 1-click launch in torrent client'})
             elif '.torrent file' in lower_txt and '.torrent File Download' not in seen_torrent:
                 seen_torrent.add('.torrent File Download')
                 torrent_mirrors.append({'name': '.torrent File Download', 'type': 'torrent_file', 'url': href, 'tag': 'Direct .torrent file download to Downloads'})
-            elif ('1337x' in lower_txt or '1337x.to' in lower_href) and '1337x Torrent Page' not in seen_torrent:
-                seen_torrent.add('1337x Torrent Page')
-                torrent_mirrors.append({'name': '1337x Torrent Page', 'type': 'web', 'url': href, 'tag': 'Open tracker page in web browser'})
-            elif 'tapochek.net' in lower_href and 'Tapochek.net' not in seen_torrent:
-                seen_torrent.add('Tapochek.net')
-                torrent_mirrors.append({'name': 'Tapochek.net Tracker', 'type': 'web', 'url': href, 'tag': 'Russian tracker mirror'})
-            elif 'rutor.info' in lower_href and 'RuTor' not in seen_torrent:
-                seen_torrent.add('RuTor')
-                torrent_mirrors.append({'name': 'RuTor Tracker', 'type': 'web', 'url': href, 'tag': 'RuTor tracker mirror'})
 
         # Sort direct mirrors: FileKeeper first, FuckingFast second, DataNodes third
         order = {'FileKeeper': 0, 'FuckingFast': 1, 'DataNodes': 2}
@@ -579,12 +570,6 @@ async def handle_repack_mirror_selection(repack_url: str):
                         print(f"{C_RED}[!] Could not open torrent file: {e}{C_RESET}")
             else:
                 print(f"{C_RED}[!] Could not download .torrent file from paste.{C_RESET}")
-
-        elif sub_type == 'web':
-            web_url = item['url']
-            print(f"\n{C_GREEN}[+] Opening tracker page in default browser:{C_RESET} {C_CYAN}{web_url}{C_RESET}")
-            copy_to_clipboard(web_url)
-            webbrowser.open(web_url)
 
 
 async def extract_fuckingfast(page, url: str, retries: int = 3) -> str | None:

@@ -24,7 +24,6 @@ A high-performance multi-hoster engine that automatically extracts direct CDN do
 | **DataNodes** (`datanodes.to`) | Direct Download | ~6.0s / link | Cloud storage mirrors with countdown handling |
 | **Magnet Links** | Torrent Mirror | Instant | 1-click launch into default torrent client (qBittorrent / BitTorrent) |
 | **.torrent File Download** | Torrent Mirror | ~2.0s | Decrypts PrivateBin attachment and downloads `.torrent` directly to `Downloads` |
-| **Tracker Pages (1337x / Tapochek)** | Torrent Mirror | Instant | Copies tracker URL to clipboard and opens in browser |
 
 ---
 
@@ -43,7 +42,7 @@ No git, no cloning, and no copying raw code required! Simply download the standa
 2. **Launch the Engine**: Double-click `Download_FitGirl_Links.bat` (Windows) or `Download_FitGirl_Links.command` (macOS). The engine auto-detects links directly from your clipboard!
 3. **Interactive Mirror Selector (Repack Pages)**:
    * When pasting a repack game page URL, the tool scans all available mirrors in ~300ms.
-   * Choose between **Direct Download Hosters** (FileKeeper, FuckingFast, DataNodes) or **Torrent Mirrors** (Magnet, .torrent file, 1337x).
+   * Choose between **Direct Download Hosters** (FileKeeper, FuckingFast, DataNodes) or **Torrent Mirrors** (Magnet URI or .torrent file download).
 4. **Filter Your Downloads**:
    * **Language Voiceovers**: Choose to keep English only (automatically skipping 20–30 GB of foreign audio files!).
    * **Bonus Files**: Option to exclude soundtracks, trailers, and developer commentary (`fg-optional*`).
