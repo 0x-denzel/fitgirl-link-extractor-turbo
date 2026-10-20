@@ -1,94 +1,56 @@
 # FitGirl Turbo Link Extractor
 
-Version **1.3.1** · By **0xDENZEL**
+Quickly extract direct download links from **FitGirl Repacks**, ready to import into **IDM**, **JDownloader 2**, or **Free Download Manager**. Supports **FileKeeper**, **FuckingFast**, magnet links, and `.torrent` files on Windows and macOS.
 
-Extract direct download URLs from FitGirl repack pages and PrivateBin pastes using **FileKeeper** and **FuckingFast**. Export ordered links for import into IDM, JDownloader 2, FDM, or another download manager. Magnet URIs and `.torrent` files are also supported.
+```text
+ =============================================================================
+    ______ _ _    _____ _      _   _______             _
+   |  ____(_) |  / ____(_)    | | |__   __|           | |
+   | |__   _| |_| |  __ _ _ __| |    | | _   _ _ __   | |__   ___
+   |  __| | | __| | |_ | | '__| |    | || | | | '__|  | '_ \ / _ \
+   | |    | | |_| |__| | | |  | |    | || |_| | |     | |_) | (_) |
+   |_|    |_|\__|\_____|_|_|  |_|    |_| \__,_|_|     |_.__/ \___/
 
-## Launch
-
-Python **3.10 or newer** must be installed. Download the [standalone ZIP or launchers from the latest release](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest). Extract the ZIP into a writable folder and double-click `Download_FitGirl_Links.bat` on Windows. On macOS, put `Download_FitGirl_Links.command` beside the BAT file, make the launcher executable if necessary (`chmod +x Download_FitGirl_Links.command`), then run it. Linux users can run `python3 -x Download_FitGirl_Links.bat`.
-
-No Git checkout or virtual environment is required. Needed Python packages install automatically into `.fitgirl-runtime/packages` beside the script. Browser operations use installed Chrome when available; otherwise Chromium installs into `.fitgirl-runtime/browsers`. First setup requires internet access and enough disk space. Help and version commands do not install anything.
-
-All automation browsers are **headless**, including fallback launches. Browser profiles, temporary downloads, and installed runtime files stay under `.fitgirl-runtime`; browser sessions and cookies are not saved for reuse between runs.
-
-## Use
-
-1. Copy a repack URL, full PrivateBin URL (including its `#` key), hoster URLs, magnet URI, or `.torrent` URL.
-2. Launch the script. Use detected clipboard contents or paste a URL, a text-file path, or a multiline list.
-3. Select a mirror for a repack page and choose language/bonus filters.
-4. Import the saved `<Game_Name>_links.txt` from `~/Downloads/` into your download manager. The app also attempts to copy the links and reveal the file.
-
-English selective files are retained by default; use `--lang all` to retain every language. `--no-bonus` removes `fg-optional-*` files. Filters also apply to direct CDN URLs. Input order is retained and duplicates are removed.
-
-During resolution, a terminal displays one overwritten progress row sized to its current width. Redirected output omits per-link progress. Setup, selection, and final summaries appear outside that row.
-
-Every resolved URL is checkpointed with an atomic file replacement **before browser cleanup**. Ctrl+C preserves completed links, closes browser resources, and attempts clipboard/file reveal. Cancellation before the first success leaves an existing output file unchanged. Clipboard failure does not prevent file export or reveal. The default export is in Downloads; `--output` selects another path.
-
-## Supported hosters
-
-| Hoster | Behavior |
-| --- | --- |
-| FileKeeper | Preferred automatic mirror; resolves its form to a `dlproxy.uk` URL. |
-| FuckingFast | Captures the download redirect, including the first successful HTMX response. |
-
-### Recognized DataNodes sources
-
-**DataNodes landing-page extraction is unsupported** and is absent from the main mirror selector. The app does not visit DataNodes landing pages, wait for their countdown, or attempt verification. Use the original repack page and choose FileKeeper or FuckingFast instead. Already-direct `datanodes.to/d/…` URLs can still be exported without browser resolution.
-
-For compatibility, the old `--mirror datanodes` option is accepted on a repack page solely to find alternate mirrors. The app compares complete lists of archive filenames and part numbers, then resolves matching files through FileKeeper, followed by FuckingFast if needed. Only matching, unique manifests qualify. A missing or mismatched manifest is reported; files are never guessed. Filename matching is not a binary content-integrity check.
-
-Standalone DataNodes links or DataNodes-only pastes lack the original repack context, so the app reports that an alternate source is required. No host is guaranteed to work on every network or every run.
-
-## Command line
-
-```powershell
-# Windows: help works without third-party packages
-python -x Download_FitGirl_Links.bat --help
-
-# Choose the first available preferred host without a mirror prompt
-python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/" --mirror auto
-
-# Choose a supported host explicitly
-python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/" --mirror fuckingfast
-
-# Preserve all languages, omit bonus files, and set the output path
-python -x Download_FitGirl_Links.bat "links.txt" --lang all --no-bonus -o "game_links.txt"
+             >>> BY 0xDENZEL | Website | Buy Me a Coffee <<<
+ =============================================================================
 ```
 
-Use `python3` in place of `python` on macOS/Linux. A source argument can be a URL, quoted link list, or UTF-8 text file. The supported `--mirror` choices are `auto`, `filekeeper`, and `fuckingfast`. Without a source, the app enters its interactive loop. Without interactive stdin, a supplied repack page automatically prefers FileKeeper unless a mirror is specified.
+## Supported Hosters & Mirrors
 
-Magnet URIs are copied and can be opened in the default torrent client after an interactive prompt. Direct `.torrent` responses and decrypted PrivateBin attachments must contain valid torrent metadata before being saved. Password-protected, expired, malformed, and unsupported paste content produces an explicit error.
+| Mirror | Support |
+| :--- | :--- |
+| **FileKeeper** | Direct download links — recommended |
+| **FuckingFast** | Direct download links |
+| **Magnet links** | Open with your torrent client |
+| **.torrent files** | Save to Downloads |
 
-The preserved Windows batch wrapper interprets nonzero interpreter exits as launcher failures. Handled application errors are therefore printed as summaries rather than forwarded as process exit codes; callers needing structured status can use `run_pipeline()` and its `RunSummary`.
+DataNodes extraction is currently unsupported. Choose FileKeeper or FuckingFast instead.
 
-## Compatibility and limits
+## 1-Click Launch
 
-- Windows clipboard access uses native Unicode Win32 APIs with bounded retries. macOS uses `pbcopy`/`pbpaste`; Linux tries Wayland clipboard tools, then `xclip`/`xsel`. Linux clipboard tools must be present for clipboard integration.
-- Explorer/Finder reveal and download-manager launch are separate from browser automation. Download-manager launch requires an interactive confirmation.
-- The extractor captures candidate download URLs without downloading game payloads. Host URLs may expire or depend on a session; a captured URL is not proof of a completed download.
-- HTTP redirects are accepted only for recognized host/CDN destinations. Unicode filenames and encoded URLs are preserved; output filenames remove control characters and characters invalid on Windows.
-- Browser pages and listeners are cleaned after each file. Images, fonts, and media are blocked; scripts, styles, fetch requests, and verification resources remain available.
-- Windows headless and simulated OS-adapter checks were run for this release. Native macOS/Linux behavior and a fresh-machine dependency installation have not been physically validated.
+**Python 3.10 or newer is required.** Dependencies install automatically on first use. No Git or virtual environment is needed.
 
-## Development and validation
+- 🚀 **Windows:** Download [Download_FitGirl_Links.bat](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest/download/Download_FitGirl_Links.bat) and double-click it.
+- 🍎 **macOS:** Download the BAT above and [Download_FitGirl_Links.command](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest/download/Download_FitGirl_Links.command). Put both in the same folder and run the `.command` file. If needed, run `chmod +x Download_FitGirl_Links.command` first.
 
-The BAT Python body is the canonical engine. **Do not change its first line**: Windows executes it as batch, and Python skips it with `-x`.
+## How It Works
 
-`download_util.py`, `extract_ff_links.py`, and `app.py` delegate to that same engine. The legacy extractor keeps its `Downloads/idm_links.txt` default; `app.py` keeps its `output/<prefix>_links.txt` default and legacy options.
+1. Copy a FitGirl repack page, PrivateBin paste, or list of supported links.
+2. Launch the tool and use your clipboard contents or paste your links.
+3. Choose your mirror, language, and optional-content preferences.
+4. Import the saved links from your Downloads folder into your download manager.
+
+Links are also copied to your clipboard. Progress stays on one line, and **Ctrl+C** saves the links completed so far. Torrent links can be opened in your default torrent client.
+
+## Command Line Usage
 
 ```powershell
-python -m unittest discover -s tests -v
-
-# Opt in to synthetic network fixtures in real headless Chrome/Chromium
-$env:FITGIRL_BROWSER_TESTS = "1"
-python -m unittest discover -s tests -v
+python -x Download_FitGirl_Links.bat "https://fitgirl-repacks.site/game-name/"
+python -x Download_FitGirl_Links.bat "links.txt" --lang english --no-bonus -o "game_links.txt"
 ```
 
-On macOS/Linux, use `FITGIRL_BROWSER_TESTS=1 python3 -m unittest discover -s tests -v`. Browser tests require installed dependencies and a usable headless browser; first-run setup can install them. The 100-part test runs 100 simulated file pages through a real invisible browser to check ordering, saved output, and cleanup. It does not download 100 live files or test DataNodes reliability. Other fixtures cover cancellation after URL capture, rejected redirects, and status handling. Test exports stay in `.test-output`; clipboard, file reveal, and client launch are mocked.
-
-Observed live samples on 2026-10-20: FileKeeper resolved 2/2 probes in 3.063 and 1.497 seconds; FuckingFast resolved 2/2 final probes in 1.897 and 0.687 seconds. First probes include lazy browser startup. DataNodes produced no direct URL in the audited verification experiments, so its landing-page resolver was removed in v1.3.1. Earlier v1.3.0 testing mapped all 21 DataNodes parts to both alternate hosts and resolved a one-part fallback in 10.490 seconds, including the now-removed DataNodes attempt. These small samples are engineering checks, not reliability guarantees or download-speed measurements. See [VALIDATION.md](VALIDATION.md) for the current release checks and their limits.
+Use `python3` on macOS. Run with `--help` for more options.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT License](LICENSE) · By **0xDENZEL**

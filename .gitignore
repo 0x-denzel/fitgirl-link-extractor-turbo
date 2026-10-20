@@ -3,3 +3,9 @@ venv
 .fitgirl-runtime/
 .test-output/
 *.pyc
+
+/tests/
+
+/VALIDATION.md
+
+/docs/AUDIT_2026-10-20.md

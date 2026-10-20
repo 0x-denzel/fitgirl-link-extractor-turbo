@@ -3,37 +3,9 @@
 All notable changes to this project will be documented in this file.
 
 ## [v1.3.1] - 2026-10-20
-### Changed
-- Present FileKeeper and FuckingFast as the supported extraction engines; remove DataNodes from the main selector, banner, and supported CLI choices shown in help.
-- Remove DataNodes landing-page navigation, countdown handling, and verification attempts. Standalone sources immediately request an alternate host; already-direct DataNodes URLs still pass through.
-- Retain the old `--mirror datanodes` option only for archive-manifest matching on a repack page, resolving corresponding files through FileKeeper and then FuckingFast without attempting DataNodes.
-- Clarify that the 100-part headless test uses simulated pages in a real invisible browser and does not establish live host reliability.
-- Add regression coverage for unsupported DataNodes navigation, primary selection, direct passthrough, and alternate-host resolution.
-
-## [v1.3.0] - 2026-10-20
-### Added
-- Bounded DataNodes resolution with a batch circuit breaker. Repack pages can fall back to FileKeeper and FuckingFast only after complete archive filename/part manifests match.
-- Atomic export after each resolved URL, including a checkpoint before listener cleanup, preserving completed results on cancellation and unexpected errors.
-- Offline regression tests and opt-in real headless browser fixtures, including a 100-part lifecycle run.
-- Lazy local dependency/browser setup, a dependency-free `--help`, `--version`, and explicit `--mirror` selection.
-- Cancellation of the browser installer process tree; local pip temporary files with its external cache disabled.
-
-### Fixed
-- Retain the first successful FuckingFast HTMX redirect even if its download button disappears. Keep HTTP browser identity aligned with the installed browser version.
-- Parse inline mirrors outside a malformed article boundary; preserve all archive parts and mixed input order.
-- Apply language/bonus filters to direct links; recognize FileKeeper CDN links; reject deceptive hostname matches.
-- Handle encoded URLs, escaped JSON pastes, Unicode filenames, expired/password-protected/malformed pastes, and torrent metadata validation.
-- Distinguish visible missing-file pages from script text and classify verification/rate-limit failures separately.
-- Bound progress to terminal width and suppress per-link output when redirected.
-- Clean pages, listeners, pending callbacks, contexts, and browser resources; block image/font/media payloads while preserving functional requests.
-- Bound clipboard subprocesses and Win32 clipboard retries; preserve export when clipboard or file reveal fails.
-- Route legacy Python entry points through the canonical BAT engine and preserve their command-line defaults.
-
-### Changed
-- Require Python 3.10 or newer. Dependencies and browser downloads install beside the script; no virtual environment or Git checkout is needed.
-- Preserve the Windows polyglot first line exactly and keep every browser launch headless.
-- Document DataNodes limitations and measured sample timings without claiming universal verification success.
-- Normalize the macOS launcher's line endings and pass all arguments to the canonical engine.
+- FileKeeper and FuckingFast are the supported download hosts.
+- Improved reliability, progress display, and cancellation handling.
+- DataNodes extraction is currently unsupported.
 
 ## [v1.2.0] - 2026-10-20
 ### Added
