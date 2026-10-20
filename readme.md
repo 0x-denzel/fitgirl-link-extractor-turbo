@@ -19,8 +19,8 @@ DataNodes extraction is currently unsupported. Choose FileKeeper or FuckingFast 
 
 **Python 3.10 or newer is required.** Dependencies install automatically on first use. No Git or virtual environment is needed.
 
-- 🚀 **Windows:** Download [Download_FitGirl_Links.bat](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest/download/Download_FitGirl_Links.bat) and double-click it.
-- 🍎 **macOS:** Download the BAT above and [Download_FitGirl_Links.command](https://github.com/EditByDenzel/fitgirl-link-generator-updated/releases/latest/download/Download_FitGirl_Links.command). Put both in the same folder and run the `.command` file. If needed, run `chmod +x Download_FitGirl_Links.command` first.
+- 🚀 **Windows:** Download [Download_FitGirl_Links.bat](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.bat) and double-click it.
+- 🍎 **macOS:** Download the BAT above and [Download_FitGirl_Links.command](https://github.com/EditByDenzel/fitgirl-link-extractor-turbo/releases/latest/download/Download_FitGirl_Links.command). Put both in the same folder and run the `.command` file. If needed, run `chmod +x Download_FitGirl_Links.command` first.
 
 ## How It Works
 
